@@ -1,0 +1,11 @@
+Flask
+SQLAlchemy
+Flask-SQLAlchemy
+Flask-JWT-Extended
+PyQRCode
+pandas
+openpyxl
+qrcode
+Flask-Migrate
+Gunicorn
+Flask-CORS

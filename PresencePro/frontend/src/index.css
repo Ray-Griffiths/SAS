@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Basic styling for the message area */
+.message-area {
+    margin-bottom: 1rem;
+    padding: 1rem;
+    border-radius: 0.25rem;
+    /* Add more styling as needed */
+}
+
+/* Styling for success messages */
+.success-message {
+    background-color: #d4edda; /* Light green background */
+    color: #155724; /* Dark green text */
+    border: 1px solid #c3e6cb; /* Green border */
+}
+
+/* Styling for error messages */
+.error-message {
+    background-color: #f8d7da; /* Light red background */
+    color: #721c24; /* Dark red text */
+    border: 1px solid #f5c6cb; /* Red border */
+}
