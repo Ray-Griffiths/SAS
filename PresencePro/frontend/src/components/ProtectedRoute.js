@@ -6,6 +6,10 @@ function ProtectedRoute({ element }) {
   const { user, loading } = useAuth(); // Use the useAuth hook
   const location = useLocation();
 
+  console.log("ProtectedRoute evaluated for path:", location.pathname); // Log current path
+  console.log("ProtectedRoute - user:", user); // Log user object
+  console.log("ProtectedRoute - loading:", loading); // Log loading state
+
   // While loading, you might render a spinner or null
   if (loading) {
     return null; // Or a loading indicator
@@ -13,6 +17,7 @@ function ProtectedRoute({ element }) {
 
   // Check if the user is authenticated
   const isAuthenticated = !!user; // isAuthenticated is true if user is not null
+  console.log("ProtectedRoute - isAuthenticated:", isAuthenticated); // Log isAuthenticated
 
   // You can add role-based checks here if needed
   // For example, to only allow admins to access '/admin'

@@ -30,6 +30,28 @@ export const AuthProvider = ({ children }) => {
     loadUserFromToken();
   }, []);
 
+  // New useEffect to handle navigation after user state is set
+  useEffect(() => {
+    if (user && !loading) {
+      // Navigate based on role after user is successfully loaded or logged in
+      console.log("User state updated, attempting navigation based on role.");
+      if (user.is_admin) {
+        console.log("User is admin, navigating to /admin/dashboard from useEffect.");
+        navigate('/admin/dashboard');
+      } else if (user.role === 'lecturer') {
+        console.log("User is lecturer, navigating to /lecturer from useEffect.");
+        navigate('/lecturer');
+      } else if (user.role === 'student') {
+         console.log("User is student, navigating to /student from useEffect.");
+         navigate('/student');
+      } else {
+         console.log("User role not recognized, navigating to / from useEffect.");
+         navigate('/');
+      }
+    }
+  }, [user, loading, navigate]); // Depend on user, loading, and navigate
+
+
   // Login function
   const login = async (username, password) => {
     setLoading(true);
@@ -41,25 +63,6 @@ export const AuthProvider = ({ children }) => {
       // Fetch user profile using the token from localStorage via interceptor
       const userProfile = await fetchUserProfile();
       setUser({ ...userProfile.profile, token });
-
-      // Redirect based on role after successful login
-      if (userProfile.profile && userProfile.profile.is_admin) {
-        console.log("User is admin, navigating to /admin/dashboard"); // Log before navigate
-        navigate('/admin/dashboard');
-        console.log("Navigation call made for admin"); // Log after navigate
-      } else if (userProfile.profile && userProfile.profile.role === 'lecturer') {
-        console.log("User is lecturer, navigating to /lecturer");
-        navigate('/lecturer');
-        console.log("Navigation call made for lecturer");
-      } else if (userProfile.profile && userProfile.profile.role === 'student') {
-         console.log("User is student, navigating to /student");
-         navigate('/student');
-         console.log("Navigation call made for student");
-      } else {
-         console.log("User role not recognized, navigating to /");
-         navigate('/');
-         console.log("Navigation call made for unknown role");
-      }
 
       setLoading(false);
       return userProfile;
