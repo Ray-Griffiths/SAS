@@ -1,7 +1,6 @@
 import axios from 'axios';
 
 const api = axios.create({
-  // Use /api as the base URL since backend will serve frontend and APIs under /api
   baseURL: '/api',
   headers: {
     'Content-Type': 'application/json',
@@ -9,7 +8,6 @@ const api = axios.create({
   withCredentials: true,
 });
 
-// Attach token automatically for all requests
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('jwt_token');
@@ -21,10 +19,8 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// ------------------ AUTH ------------------
-
-export const login = async (username, password) => {
-  const response = await api.post('/login', { username, password });
+export const login = async (identifier, password) => {
+  const response = await api.post('/login', { identifier, password });
   return response.data;
 };
 
@@ -33,33 +29,20 @@ export const register = async (userData) => {
   return response.data;
 };
 
-// Explicit JWT logout + clear localStorage
 export const logoutApi = async () => {
   try {
-    const response = await api.post('/logout', {}); // interceptor attaches token
+    const response = await api.post('/logout', {});
     if (response.status === 200) {
-      localStorage.removeItem('jwt_token'); // clear token locally
+      localStorage.removeItem('jwt_token');
     }
     return response.data;
   } catch (error) {
-    // Always clear token locally even if backend logout fails
     localStorage.removeItem('jwt_token');
     throw error;
   }
 };
 
-export const fetchUserProfile = async (token = null) => {
-  const config = {};
-  if (token) { // If token is explicitly passed, use it for this specific request
-    config.headers = {
-      Authorization: `Bearer ${token}`,
-    };
-  }
-  const response = await api.get('/my-profile', config);
-  return response.data;
-};
-
-export const getMyProfile = async () => {
+export const fetchUserProfile = async () => {
   const response = await api.get('/my-profile');
   return response.data;
 };
@@ -69,13 +52,12 @@ export const updateMyProfile = async (profileData) => {
   return response.data;
 };
 
-// ------------------ USERS ------------------
-
 export const getUsers = async (page = 1, per_page = 20) => {
   const response = await api.get(`/users?page=${page}&per_page=${per_page}`);
   return response.data;
 };
 
+// Corrected function to pass userData directly
 export const createUser = async (userData) => {
   const response = await api.post('/users', userData);
   return response.data;
@@ -96,7 +78,10 @@ export const deleteUser = async (userId) => {
   return response.data;
 };
 
-// ------------------ COURSES ------------------
+export const getLecturers = async () => {
+    const response = await api.get('/lecturers');
+    return response.data;
+};
 
 export const getCourses = async (page = 1, per_page = 20) => {
   const response = await api.get(`/courses?page=${page}&per_page=${per_page}`);
@@ -142,8 +127,6 @@ export const getEnrolledStudents = async (courseId) => {
   return response.data;
 };
 
-// ------------------ STUDENTS ------------------
-
 export const getStudents = async (page = 1, per_page = 20, filters = {}) => {
   const params = new URLSearchParams({ page, per_page, ...filters });
   const response = await api.get(`/students?${params.toString()}`);
@@ -170,7 +153,10 @@ export const deleteStudent = async (studentDbId) => {
   return response.data;
 };
 
-// ------------------ SESSIONS ------------------
+export const getSessions = async (page = 1, per_page = 20) => {
+  const response = await api.get(`/sessions?page=${page}&per_page=${per_page}`);
+  return response.data;
+};
 
 export const createSession = async (sessionData) => {
   const response = await api.post('/sessions', sessionData);
@@ -197,8 +183,6 @@ export const deleteSession = async (sessionId) => {
   return response.data;
 };
 
-// ------------------ QR CODES ------------------
-
 export const createQrCode = async (sessionId, duration) => {
   const response = await api.post(`/sessions/${sessionId}/qr`, { duration });
   return response.data;
@@ -213,8 +197,6 @@ export const getQrCodeStatus = async (sessionId) => {
   const response = await api.get(`/sessions/${sessionId}/qr`);
   return response.data;
 };
-
-// ------------------ ATTENDANCE ------------------
 
 export const recordAttendance = async (
   sessionId,
@@ -265,8 +247,6 @@ export const getAttendanceReport = async (
   return response.data;
 };
 
-// ------------------ IMPORT/EXPORT ------------------
-
 export const exportStudents = async (filters = {}, exportFormat = 'csv') => {
   const params = new URLSearchParams({ format: exportFormat, ...filters });
   const response = await api.get(`/export_students?${params.toString()}`, {
@@ -279,8 +259,6 @@ export const importStudents = async (studentsData) => {
   const response = await api.post('/import-students', studentsData);
   return response.data;
 };
-
-// ------------------ BACKEND STATUS ------------------
 
 export const getBackendStatus = async () => {
   try {

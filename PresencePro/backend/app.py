@@ -38,8 +38,8 @@ print("Imports complete")
 #app = Flask(__name__)
 app = Flask(
         __name__,
-        static_url_path='/static',  # The URL path for static files
-        static_folder='../frontend/build/static'  # The actual folder containing static files
+        static_folder='../frontend/build',
+        static_url_path=''
     )
 
 # Use os.path.join to create platform-independent paths
@@ -63,6 +63,9 @@ class Config:
 print("Flask app created")
 # Configure Flask to serve static files from the 'build' directory
 app.config.from_object(Config)
+# --- FIX: Initialize CORS ---
+# This will allow the frontend to make requests to the backend.
+CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": "*"}})
 print(f"App debug mode: {app.debug}")
 if app.config["JWT_SECRET_KEY"] == str(uuid4()):
     logger.warning("Using randomly generated JWT_SECRET_KEY. Set JWT_SECRET_KEY in environment for production.")
@@ -74,6 +77,33 @@ jwt = JWTManager(app)
 
 print("Flask extensions initialized")
 
+# --- Database Initialization Command ---
+@app.cli.command("init-db")
+def init_db_command():
+    """Clears existing data and creates new tables and the default admin user."""
+    db.create_all()
+    logger.info("Database tables created.")
+    
+    # Check if the admin user already exists
+    admin_user = db.session.query(User).filter_by(username='admin').first()
+    if not admin_user:
+        admin_password = os.environ.get("ADMIN_PASSWORD", "AdminPass123!")
+        new_admin = User(
+            username="admin",
+            email="admin@example.com",
+            password=generate_password_hash(admin_password, method='pbkdf2:sha256'),
+            is_admin=True,
+            role="admin"
+        )
+        db.session.add(new_admin)
+        db.session.commit()
+        logger.info("Default admin user created.")
+        if admin_password == "AdminPass123!":
+            logger.warning("Using default admin password. Please change it immediately.")
+    else:
+        logger.info("Admin user already exists.")
+    print("Database initialized.")
+
 # Deferred imports for utilities
 def get_attendance_utils():
     from utils.attendance import calculate_student_attendance, calculate_course_attendance
@@ -83,11 +113,10 @@ def get_attendance_utils():
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
-        if path != "" and os.path.exists(os.path.join(app.root_path, '../frontend/build', path)):
-            return send_from_directory(os.path.join(app.root_path, '../frontend/build'), path)
-        else:
-            return send_from_directory(os.path.join(app.root_path, '../frontend/build'), 'index.html')
-
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
 
 # --- JWT Token Loader and Denylist ---
 @jwt.user_identity_loader
@@ -148,29 +177,43 @@ def internal_server_error(error):
 # --- Login Route ---
 @app.route('/api/login', methods=['POST'])
 def login_user():
-    data = request.get_json(silent=True) # Use silent=True to avoid error if body is empty
+    data = request.get_json(silent=True)
     if not data:
         return jsonify({"message": "Request body must be JSON"}), 400
 
-    username = data.get('username', '').strip()
+    # The frontend now sends an 'identifier' which can be a username or an email
+    identifier = data.get('identifier', '').strip()
     password = data.get('password', '')
 
-    if not username or not password:
-        return jsonify({"message": "Username and password are required"}), 400
+    if not identifier or not password:
+        return jsonify({"message": "Identifier and password are required"}), 400
 
-    if not re.match(r'^[a-zA-Z0-9_]{3,50}$', username):
-        return jsonify({"message": "Username must be 3-50 alphanumeric characters or underscores"}), 400
+    # Import 'or_' to create a query that checks both username and email
+    from sqlalchemy import or_
+    
+    # Find the user by matching the identifier against either the username or the email
+    user = db.session.query(User).filter(
+        or_(User.username == identifier, User.email == identifier)
+    ).first()
 
-    user = db.session.query(User).filter_by(username=username).first()
+    # If a user is found and the password is correct, create an access token
     if user and check_password_hash(user.password, password):
         access_token = create_access_token(identity=user.username)
-        logger.info(f"User {username} logged in successfully")
-        return jsonify(access_token=access_token, role=user.role, is_admin=user.is_admin), 200
-    logger.warning(f"Failed login attempt for username: {username}")
-    return jsonify({"message": "Invalid username or password"}), 401
+        logger.info(f"User '{identifier}' logged in successfully as {user.username}")
+        # Return all necessary user info for the frontend
+        return jsonify(
+            access_token=access_token, 
+            role=user.role, 
+            is_admin=user.is_admin,
+            username=user.username
+        ), 200
+    
+    # If login fails, log the attempt and return an error message
+    logger.warning(f"Failed login attempt for identifier: '{identifier}'")
+    return jsonify({"message": "Invalid identifier or password"}), 401
 
 # --- Logout Route ---
-@app.route('/logout', methods=['POST'])
+@app.route('/api/logout', methods=['POST'])
 @jwt_required()
 def logout_user():
     """Allows a logged-in user to invalidate their token."""
@@ -183,7 +226,7 @@ def logout_user():
     return jsonify({"message": "Token missing JTI claim"}), 400
 
 # --- User Self-Registration Route ---
-@app.route('/register', methods=['POST'])
+@app.route('/api/register', methods=['POST'])
 def register_user_route(): # Renamed to avoid conflict if a function with the same name existed
     data = request.get_json()
     if not data:
@@ -216,7 +259,7 @@ def register_user_route(): # Renamed to avoid conflict if a function with the sa
         return jsonify({"message": "Email already exists"}), 409
 
     try:
-        hashed_password = generate_password_hash(password)
+        hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
         new_user = User(
             username=username,
             password=hashed_password,
@@ -232,66 +275,52 @@ def register_user_route(): # Renamed to avoid conflict if a function with the sa
         db.session.rollback()
         logger.error(f"Error registering user {username}: {str(e)}", exc_info=True)
         return jsonify({"message": "Error during registration"}), 500
+
 # --- User Management Routes ---
 @app.route('/api/my-profile', methods=['GET'])
 @jwt_required()
 def get_my_profile():
     """Allows a logged-in user to retrieve their linked profile (User + Student if exists)."""
-    logger.info(f"Accessing /api/my-profile. Request headers: {request.headers}") # Log headers
     current_user_identity = get_jwt_identity()
-    logger.info(f"Current user identity from JWT: {current_user_identity}") # Log identity
-
     current_user = db.session.query(User).filter_by(username=current_user_identity).first()
 
     if not current_user:
-        logger.warning(f"User not found for identity: {current_user_identity}") # Log if user not found
+        logger.warning(f"User not found for identity: {current_user_identity}")
         return jsonify({"status": "error", "message": "User not found or token invalid"}), 401
 
+    # Add boolean flags for roles to make frontend logic simpler and more robust
     user_profile = {
         "id": current_user.id,
         "username": current_user.username,
         "email": current_user.email,
         "role": current_user.role,
-        "is_admin": current_user.is_admin
+        "is_admin": current_user.is_admin,
+        "is_student": current_user.role == 'student',
+        "is_lecturer": current_user.role == 'lecturer'
     }
 
-    # If the user is a student, attempt to include their student profile data
-    student_profile_data = None
-    logger.info(f"Fetching profile details for user: {current_user_identity}, role: {current_user.role}")
+    # If the user is a student, include their linked student profile data
     if current_user.role == 'student':
-        try:
-            student_profile = db.session.query(Student).filter_by(user_id=current_user.id).first()
-            if student_profile:
-                student_profile_data = {
-                    "id": student_profile.id,
-                    "student_id": student_profile.student_id,
-                    "name": student_profile.name,
-                    "email": student_profile.email, # Student table also has email
-                    # Add other student fields as needed
-                }
-                # Include courses the student is enrolled in (optional, can be a separate endpoint if too verbose)
-                user_profile["enrolled_courses"] = [{"id": course.id, "name": course.name} for course in student_profile.courses]
-            else:
-                # Log if a user with role student doesn't have a linked profile
-                logger.warning(f"User {current_user.username} (ID: {current_user.id}) has role 'student' but no linked student profile.")
-        except Exception as e:
-            # Log the error during student profile fetch
-            logger.error(f"Error fetching student profile for user {current_user.username} (ID: {current_user.id}): {str(e)}", exc_info=True)
-            # Continue without student profile data
-            student_profile_data = None
-            
-    # If the user is a lecturer, include courses they teach
-    # This is not directly on the user profile but linked via Course table
-    # Can be added here or a separate endpoint for clarity/performance
+        student_profile = db.session.query(Student).filter_by(user_id=current_user.id).first()
+        if student_profile:
+            user_profile["student_profile"] = {
+                "id": student_profile.id,
+                "student_id": student_profile.student_id,
+                "name": student_profile.name,
+                "email": student_profile.email,
+            }
+            user_profile["enrolled_courses"] = [
+                {"id": course.id, "name": course.name} for course in student_profile.courses
+            ]
+        else:
+            logger.warning(f"User {current_user.username} has 'student' role but no linked profile.")
+
+    # If the user is a lecturer, include the courses they teach
     if current_user.role == 'lecturer':
         taught_courses = db.session.query(Course).filter_by(lecturer_id=current_user.id).all()
         user_profile["taught_courses"] = [
             {"id": course.id, "name": course.name} for course in taught_courses
         ]
-
-    # Add student_profile data if it was successfully retrieved
-    if student_profile_data:
-        user_profile["student_profile"] = student_profile_data
 
     return jsonify({"status": "success", "profile": user_profile}), 200
 
@@ -304,7 +333,9 @@ def update_my_profile():
     # TODO: Implement update logic here
     if not current_user:
         return jsonify({"status": "error", "message": "User not found or token invalid"}), 401
-@app.route('/users', methods=['GET'])
+
+@app.route('/api/users', methods=['GET'])
+@role_required(['admin'])
 def get_users(current_user):
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 20, type=int)
@@ -321,6 +352,18 @@ def get_users(current_user):
         "current_page": users.page
     }), 200
 
+# --- FIX: ADDED THIS NEW ENDPOINT ---
+@app.route('/api/lecturers', methods=['GET'])
+@role_required(['admin', 'lecturer'])
+def get_lecturers(current_user):
+    """Returns a list of all users who are lecturers or admins."""
+    try:
+        lecturers = db.session.query(User).filter(User.role.in_(['lecturer', 'admin'])).all()
+        lecturers_data = [{"id": user.id, "username": user.username} for user in lecturers]
+        return jsonify(lecturers_data), 200
+    except Exception as e:
+        logger.error(f"Error fetching lecturers: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching lecturers"}), 500
 
 @app.route('/api/users', methods=['POST'])
 @role_required(['admin'])
@@ -353,7 +396,7 @@ def create_user(current_user):
         return jsonify({"message": "Email already exists"}), 409
 
     try:
-        hashed_password = generate_password_hash(password)
+        hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
         new_user = User(
             username=username,
             password=hashed_password,
@@ -393,11 +436,9 @@ def get_user(user_id):
         "role": requested_user.role
     }), 200
 
-@app.route('/users/<int:user_id>', methods=['PUT'])
+@app.route('/api/users/<int:user_id>', methods=['PUT'])
 @role_required(['admin']) # Ensure only admins can update other users
-def update_user(user_id):
-    current_user_identity = get_jwt_identity()
-    current_user = db.session.query(User).filter_by(username=current_user_identity).first()
+def update_user(current_user, user_id):
     user_to_update = db.session.query(User).get(user_id)
 
     if not user_to_update:
@@ -424,7 +465,7 @@ def update_user(user_id):
     if 'password' in data:
         if len(data['password']) < 8:
             return jsonify({"message": "New password must be at least 8 characters long"}), 400
-        user_to_update.password = generate_password_hash(data['password'])
+        user_to_update.password = generate_password_hash(data['password'], method='pbkdf2:sha256')
 
     if 'email' in data:
         email = data['email'].strip()
@@ -482,6 +523,7 @@ def delete_user(user_id):
         db.session.rollback()
         logger.error(f"Error deleting user {user_id}: {str(e)}", exc_info=True)
         return jsonify({"message": "Error deleting user"}), 500
+
 # --- Lecturer Student Creation Route ---
 @app.route('/api/lecturer/students', methods=['POST'])
 @role_required(['lecturer', 'admin'])
@@ -532,36 +574,37 @@ def create_student_by_lecturer(current_user):
 @app.route('/api/courses', methods=['POST'])
 @role_required(['lecturer', 'admin'])
 def create_course(current_user):
-    """Allows administrators to create new courses."""
+    """Allows administrators and lecturers to create new courses."""
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided"}), 400
 
-    # Extract and validate required fields
     name = data.get('name', '').strip()
     description = data.get('description', '').strip()
-    
-    # Optional field with validation
     lecturer_id = data.get('lecturer_id')
 
-    if not name: # Corrected indentation
+    if not name:
         return jsonify({"message": "Course name is required"}), 400
 
-    # If a lecturer_id is provided, validate it.
-    # If no lecturer_id is provided by a lecturer, assign the current lecturer user as the lecturer.
-    if lecturer_id is None and current_user.role == 'lecturer' and not current_user.is_admin:
-        # If a lecturer is creating the course and doesn't specify a lecturer_id, assign themselves
-        lecturer_id = current_user.id
-    elif lecturer_id is not None:
-        # If a lecturer_id is provided, ensure only admins can assign it,
-        # or if a lecturer provides their own ID, allow that.
+    if lecturer_id in [None, '']:
+        lecturer_id = None
+    else:
+        try:
+            lecturer_id = int(lecturer_id)
+        except (ValueError, TypeError):
+            return jsonify({"message": "Invalid lecturer_id format"}), 400
+
+    if lecturer_id is not None:
         if not current_user.is_admin and lecturer_id != current_user.id:
-             return jsonify({"message": "Unauthorized to assign a lecturer other than yourself"}), 403
+            return jsonify({"message": "Unauthorized to assign a lecturer other than yourself"}), 403
+        
         lecturer = db.session.query(User).get(lecturer_id)
         if not lecturer or lecturer.role not in ['lecturer', 'admin']:
             return jsonify({"message": "Invalid lecturer_id provided"}), 400
 
-    # Check for existing course name
+    if current_user.role == 'lecturer' and lecturer_id is None:
+        lecturer_id = current_user.id
+
     if db.session.query(Course).filter_by(name=name).first():
         return jsonify({"message": f"Course with name '{name}' already exists"}), 409
 
@@ -570,11 +613,21 @@ def create_course(current_user):
         db.session.add(new_course)
         db.session.commit()
         logger.info(f"Course '{name}' created by {current_user.username}")
-        return jsonify({"message": "Course created successfully", "id": new_course.id, "name": new_course.name}), 201
+        
+        return jsonify({
+            "message": "Course created successfully", 
+            "course": {
+                "id": new_course.id,
+                "name": new_course.name,
+                "description": new_course.description,
+                "lecturer_id": new_course.lecturer_id,
+                "total_sessions": 0,
+                "total_attendance_marks": 0
+            }
+        }), 201
     except IntegrityError:
         db.session.rollback()
-        return jsonify({"message": f"Course with name '{name}' already exists"}), 409
-        
+        return jsonify({"message": f"A course with this name already exists"}), 409
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error creating course '{name}': {str(e)}", exc_info=True)
@@ -606,47 +659,42 @@ def delete_course(current_user, course_id):
         logger.error(f"Error deleting course {course_id}: {str(e)}", exc_info=True)
         return jsonify({"message": "Error deleting course"}), 500
 
+# --- FIX: CORRECTED THE get_courses FUNCTION ---
 @app.route('/api/courses', methods=['GET'])
 @jwt_required()
 def get_courses():
     current_user_identity = get_jwt_identity()
     current_user = db.session.query(User).filter_by(username=current_user_identity).first()
 
-    # Filter courses based on user role
     query = db.session.query(Course)
     if not current_user.is_admin and current_user.role == 'lecturer':
         query = query.filter(Course.lecturer_id == current_user.id)
-    elif current_user.role == 'student': # Students can see courses they are enrolled in
+    elif current_user.role == 'student':
         query = query.join(Course.students).filter(Student.user_id == current_user.id).distinct()
-    elif not current_user.is_admin: # As a safeguard for other roles
-        return jsonify({"message": "Unauthorized to access course list"}), 403
-
+    
     page = request.args.get('page', 1, type=int)
-    # Ensure per_page is within a reasonable range, e.g., 1 to 100
     per_page = request.args.get('per_page', 20, type=int)
-    courses = query.paginate(page=page, per_page=per_page, error_out=False)
-    courses_data = [
-        {'id': course.id, 'name': course.name, 'description': course.description, 'lecturer_id': course.lecturer_id}
-        for course in courses.items
-    ]
+    courses_pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    
+    courses_data = []
+    for course in courses_pagination.items:
+        total_sessions = db.session.query(Session).filter_by(course_id=course.id).count()
+        total_attendance_marks = db.session.query(Attendance).join(Session).filter(Session.course_id == course.id).count()
+        
+        courses_data.append({
+            'id': course.id, 
+            'name': course.name, 
+            'description': course.description, 
+            'lecturer_id': course.lecturer_id,
+            'total_sessions': total_sessions,
+            'total_attendance_marks': total_attendance_marks
+        })
 
-    # Dynamically calculate total sessions and total attendance marks for each course
-    for course_data in courses_data:
-        course_id = course_data['id']
-        # Count total sessions for the course
-        total_sessions = db.session.query(Session).filter_by(course_id=course_id).count()
-
-        # Calculate total attendance marks (assuming each attendance record is 1 mark)
-        total_attendance_marks = db.session.query(Attendance).join(Attendance.session).filter(Session.course_id == course_id).count()
-
-        course_data['total_sessions'] = total_sessions
-        course_data['total_attendance_marks'] = total_attendance_marks
     return jsonify({
-
         "courses": courses_data,
-        "total": courses.total,
-        "pages": courses.pages,
-        "current_page": courses.page
+        "total": courses_pagination.total,
+        "pages": courses_pagination.pages,
+        "current_page": courses_pagination.page
     }), 200
 
 @app.route('/api/courses/<int:course_id>', methods=['GET'])
@@ -1024,7 +1072,7 @@ def unenroll_students(current_user, course_id):
         logger.error(f"Error unenrolling students from course {course_id}: {str(e)}", exc_info=True)
         return jsonify({"message": "Error unenrolling students"}), 500
 
-@app.route('/courses/<int:course_id>/students', methods=['GET'])
+@app.route('/api/courses/<int:course_id>/students', methods=['GET'])
 @jwt_required() # Keep JWT required for authorization logic
 def get_enrolled_students(course_id):
     current_user_identity = get_jwt_identity()
@@ -1576,35 +1624,3 @@ def import_students(current_user):
         "failed_count": len(failed_students),
         "failed_students": failed_students
     }), 200
-
-
-if __name__ == '__main__':
-    print("Inside __main__ block")
-    # This block is for local development and might be different in production
-    if not os.path.exists(os.path.join(BASE_DIR, '..', 'db')):
-        os.makedirs(os.path.join(BASE_DIR, '..', 'db'), exist_ok=True)
-    
-    with app.app_context():
-        try:
-            db.create_all()
-            logger.info("Database tables created.")
-            
-            # Optional: Create a default admin user if one doesn't exist
-            admin_user = db.session.query(User).filter_by(is_admin=True).first()
-            if not admin_user:
-                admin_password = os.environ.get("ADMIN_PASSWORD", "AdminPass123!")
-                new_admin = User(
-                    username="admin",
-                    email="admin@example.com",
-                    password=generate_password_hash(admin_password),
-                    is_admin=True,
-                    role="admin"
-                )
-                db.session.add(new_admin)
-                db.session.commit()
-                logger.info("Default admin user created.")
-                if admin_password == "AdminPass123!":
-                    logger.warning("Using default admin password. Please change it immediately in production.")
-        except Exception as e:
-            logger.error(f"Error creating database tables or default user: {e}")
-            sys.exit(1)

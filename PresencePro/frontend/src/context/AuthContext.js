@@ -1,100 +1,91 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { login as apiLogin, fetchUserProfile, logoutApi } from '../services/api'; 
+import { login as apiLogin, fetchUserProfile } from '../services/api';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-
   const navigate = useNavigate();
 
-  useEffect(() => {
-    const loadUserFromToken = async () => {
-      const token = localStorage.getItem('jwt_token');
-      if (token) {
-        try {
-          // Fetch user profile using the token from localStorage via interceptor
-          const userData = await fetchUserProfile(token); 
-          setUser({ ...userData.profile, token });
-        } catch (error) {
-          console.error('Error loading user from token:', error);
-          localStorage.removeItem('jwt_token');
-          setUser(null);
-        }
+  const loadUserFromToken = async () => {
+    const token = localStorage.getItem('jwt_token');
+    if (token) {
+      try {
+        // The backend now sends the correct boolean flags
+        const userProfile = await fetchUserProfile();
+        const fullUser = { ...(userProfile.profile || {}), token };
+        setUser(fullUser);
+      } catch (error) {
+        console.error("Session expired or token invalid:", error);
+        localStorage.removeItem('jwt_token');
+        setUser(null);
       }
-      setLoading(false);
-    };
+    }
+    setLoading(false);
+  };
 
+  useEffect(() => {
     loadUserFromToken();
   }, []);
 
-  // New useEffect to handle navigation after user state is set
-  useEffect(() => {
-    if (user && !loading) {
-      // Navigate based on role after user is successfully loaded or logged in
-      console.log("User state updated, attempting navigation based on role.");
-      if (user.is_admin) {
-        console.log("User is admin, navigating to /admin/dashboard from useEffect.");
-        navigate('/admin/dashboard');
-      } else if (user.role === 'lecturer') {
-        console.log("User is lecturer, navigating to /lecturer from useEffect.");
-        navigate('/lecturer');
-      } else if (user.role === 'student') {
-         console.log("User is student, navigating to /student from useEffect.");
-         navigate('/student');
-      } else {
-         console.log("User role not recognized, navigating to / from useEffect.");
-         navigate('/');
-      }
-    }
-  }, [user, loading, navigate]); // Depend on user, loading, and navigate
-
-
-  // Login function
-  const login = async (username, password) => {
+  const login = async (identifier, password) => {
     setLoading(true);
     try {
-      const userData = await apiLogin(username, password);
+      const userData = await apiLogin(identifier, password);
       const token = userData.access_token;
-
       localStorage.setItem('jwt_token', token);
-      // Fetch user profile using the token from localStorage via interceptor
+
       const userProfile = await fetchUserProfile();
-      setUser({ ...userProfile.profile, token });
+      const userWithRoles = userProfile.profile;
+
+      const fullUser = { ...userWithRoles, token };
+      // This state update is now guaranteed to happen before navigation
+      setUser(fullUser);
+
+      // Navigation logic is now inside the context to prevent race conditions
+      if (fullUser.is_admin) {
+        navigate('/admin', { replace: true });
+      } else if (fullUser.is_lecturer) {
+        navigate('/lecturer', { replace: true });
+      } else if (fullUser.is_student) {
+        navigate('/student', { replace: true });
+      } else {
+        navigate('/', { replace: true }); // Default fallback
+      }
 
       setLoading(false);
-      return userProfile;
+
     } catch (error) {
+      // Ensure state is cleaned up on failed login
+      localStorage.removeItem('jwt_token');
+      setUser(null);
       setLoading(false);
-      throw error;
+      throw error; // Re-throw error for the form to catch
     }
   };
 
-  // Logout function
-  const logout = async () => {
-    try {
-      await logoutApi();
-    } catch (error) {
-      console.error('Error during backend logout:', error);
-    }
+  const logout = () => {
     localStorage.removeItem('jwt_token');
     setUser(null);
-    navigate('/login');
+    navigate('/login', { replace: true });
+  };
+
+  const authValue = {
+    user,
+    setUser,
+    login,
+    logout,
+    loading,
+    isAuthenticated: !!user,
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading }}>
-      {children}
+    <AuthContext.Provider value={authValue}>
+      {!loading && children}
     </AuthContext.Provider>
   );
 };
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
+export const useAuth = () => useContext(AuthContext);
