@@ -1,37 +1,35 @@
 import React, { useState } from 'react';
-import { Link, Routes, Route } from 'react-router-dom';
-
-// Assume these states are managed elsewhere or passed down as props
-// const [successMessage, setSuccessMessage] = useState('');
-// const [error, setError] = useState('');
+import { Link, Outlet } from 'react-router-dom';
 
 const LecturerDashboard = () => {
+  // State for displaying success or error messages to the user
+  const [successMessage, setSuccessMessage] = useState('');
+  const [error, setError] = useState('');
+
   return (
     <div>
       <h2>Lecturer Dashboard</h2>
       <nav>
         <ul>
-          <li><Link to="/lecturer/courses">Manage Courses</Link></li>
-          <li><Link to="/lecturer/sessions">Manage Sessions</Link></li>
-          <li><Link to="/lecturer/attendance">View Attendance</Link></li>
-          <li><Link to="/lecturer/generate-qr">Generate QR Code</Link></li> {/* Added Link for QR Code Generation */}
+          <li><Link to="courses">Manage Courses</Link></li>
+          <li><Link to="sessions">Manage Sessions</Link></li>
+          <li><Link to="attendance">View Attendance</Link></li>
         </ul>
       </nav>
-      {/* Content will be rendered here based on navigation */}
-      <div>
-        <Routes>
-          {/* Nested routes defined in App.js will render here */}
-          {/* This <Routes> is necessary for the nested routes to be matched */}
-        </Routes>
 
-        {/* Message Area */}
-        {(successMessage || error) && (
-          <div className="message-area">
-            {successMessage && <div className="success-message">{successMessage}</div>}
-            {error && <div className="error-message">{error}</div>}
-          </div>
-        )}
-      </div>
+      {/* Message Area */}
+      {(successMessage || error) && (
+        <div className="message-area">
+          {successMessage && <div className="success-message">{successMessage}</div>}
+          {error && <div className="error-message">{error}</div>}
+        </div>
+      )}
+
+      <hr />
+
+      {/* Nested route components will be rendered here */}
+      {/* We can pass the message setters to child components via the Outlet's context */}
+      <Outlet context={{ setSuccessMessage, setError }} />
 
     </div>
   );

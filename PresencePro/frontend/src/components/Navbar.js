@@ -20,7 +20,7 @@ const Navbar = () => {
             <>
               <Link to="/" className="mr-4">Home</Link>
               <Link to="/contact" className="mr-4">Contact</Link>
-              {user.is_admin && (
+              {user.role === 'admin' && (
                 <Link to="/admin" className="mr-4">Admin</Link>
               )}
               {/* Add links for lecturer and student portals here if needed */}

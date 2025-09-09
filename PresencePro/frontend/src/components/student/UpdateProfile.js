@@ -1,5 +1,5 @@
 import React, {useEffect, useState} from 'react';
-import {getMyProfile, updateMyProfile} from '../../services/api'; // Corrected named imports
+import {fetchUserProfile, updateMyProfile} from '../../services/api'; // Corrected named imports
 
 const UpdateProfile = () => {
   const [name, setName] = useState('');
@@ -18,8 +18,8 @@ const UpdateProfile = () => {
       setLoading(true);
       setErrorMessage(null);
       try {
-        // Use the directly imported getMyProfile function
-        const response = await getMyProfile(); // Corrected function call
+        // Use the directly imported fetchUserProfile function
+        const response = await fetchUserProfile(); // Corrected function call
 
         if (!response.ok) {
              const errorData = await response.json();
@@ -69,7 +69,7 @@ const UpdateProfile = () => {
     }
 
      // *** Profile picture upload requires a different approach, likely FormData ***
-     // If you need to upload a file, you\'ll need to switch back to FormData
+     // If you need to upload a file, you'll need to switch back to FormData
      // and ensure your backend can handle file uploads on this endpoint or a separate one.
      // Example (if using FormData for profile picture):
      /*

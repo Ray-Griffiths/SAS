@@ -1,46 +1,35 @@
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext'; // Import useAuth
+import { useAuth } from '../context/AuthContext';
 
-function ProtectedRoute({ element }) {
-  const { user, loading } = useAuth(); // Use the useAuth hook
+function ProtectedRoute({ children, roles }) {
+  const { user, loading } = useAuth();
   const location = useLocation();
 
-  console.log("ProtectedRoute evaluated for path:", location.pathname); // Log current path
-  console.log("ProtectedRoute - user:", user); // Log user object
-  console.log("ProtectedRoute - loading:", loading); // Log loading state
-
-  // While loading, you might render a spinner or null
   if (loading) {
-    return null; // Or a loading indicator
+    return <div>Loading...</div>; // Or a spinner component
   }
 
-  // Check if the user is authenticated
-  const isAuthenticated = !!user; // isAuthenticated is true if user is not null
-  console.log("ProtectedRoute - isAuthenticated:", isAuthenticated); // Log isAuthenticated
-
-  // You can add role-based checks here if needed
-  // For example, to only allow admins to access '/admin'
-  const isAdminRoute = location.pathname.startsWith('/admin');
-  const isLecturerRoute = location.pathname.startsWith('/lecturer');
-  const isStudentRoute = location.pathname.startsWith('/student');
-
-  if (isAuthenticated) {
-    // If authenticated, check for role-based access
-    if (isAdminRoute && (user.role === 'admin' || user.is_admin)) {
-      return element; // Allow access to admin route if user is admin
-    }
-    if (isLecturerRoute && user.role === 'lecturer') {
-         return element; // Allow access to lecturer route if user is lecturer
-    }
-    if (isStudentRoute && user.role === 'student') {
-         return element; // Allow access to student route if user is student
-    }
-
-  } else {
-    // If not authenticated, redirect to login
+  if (!user) {
+    // If not logged in, redirect to the login page
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
+
+  // Check if the user has one of the required roles
+  const hasRequiredRole = roles.some(role => {
+    if (role === 'admin') return user.is_admin;
+    if (role === 'lecturer') return user.is_lecturer;
+    if (role === 'student') return user.is_student;
+    return false;
+  });
+
+  if (!hasRequiredRole) {
+    // If the user does not have the required role, redirect to a fallback page
+    // Redirecting to login might cause a loop if they are already logged in.
+    return <Navigate to="/" replace />; // Or to an 'unauthorized' page
+  }
+
+  return children;
 }
 
 export default ProtectedRoute;

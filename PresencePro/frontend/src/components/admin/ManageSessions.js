@@ -1,217 +1,238 @@
-import React, { useEffect, useState } from 'react';
-import { getSessionsForCourse, createSession, deleteSession } from '../../services/api';
+import React, { useState, useEffect, useCallback } from 'react';
+import { getCourses, getSessionsForCourse, createSession, deleteSession } from '../../services/api';
 
-const ManageSessions = () => {
-  const courseId = 'YOUR_COURSE_ID'; // Replace with the actual course ID
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [newSession, setNewSession] = useState({
-    course: '', lecturer: '', date: '', time: ''
+// Reusable Form component for adding a session (now inside ManageSessions.js)
+const SessionForm = ({ selectedCourse, onSuccess, onCancel }) => {
+  const [newSessionData, setNewSessionData] = useState({
+    session_date: '',
+    start_time: '',
+    end_time: '',
   });
-  useEffect(() => {
-    fetchSessions();
-  }, []);
-
-  const fetchSessions = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      // Placeholder API call to fetch sessions
-      // Use the directly imported getSessions function
-      const data = await getSessionsForCourse(courseId); // Corrected function call and added courseId
-      setSessions(data);
-    } catch (error) {
-      setError('Failed to fetch sessions.');
-      console.error('Error fetching sessions:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState(null);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setNewSession({ ...newSession, [name]: value });
+    setNewSessionData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleCreateSession = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setIsSubmitting(true);
+    setError(null);
+
+    if (!newSessionData.session_date || !newSessionData.start_time || !newSessionData.end_time) {
+      setError('All fields are required.');
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
-      // Placeholder API call to create a session
-      // Use the directly imported createSession function
-      await createSession(newSession); // Corrected function call
-      console.log('Session created successfully (placeholder)');
-      fetchSessions(); // Refetch sessions after creating a new one
-      setNewSession({ course: '', lecturer: '', date: '', time: '' }); // Clear form
-    } catch (error) {
-      console.error('Error creating session:', error);
-      // Handle error (e.e., show error message)
+      const sessionPayload = {
+        ...newSessionData,
+        course_id: parseInt(selectedCourse, 10),
+      };
+      await createSession(sessionPayload);
+      onSuccess(); // Tell the parent to refetch sessions
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Failed to create session.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleEditSession = (session) => {
-    console.log('Edit session clicked:', session);
-    // Implement logic to show edit form and pre-fill with session data
-    // setEditingSession(session); // Example state for editing
-  };
+  return (
+    <div className="bg-white p-6 rounded-lg shadow-md mb-6">
+      <h3 className="text-xl font-bold mb-4">Add New Session</h3>
+      <form onSubmit={handleSubmit}>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div>
+            <label htmlFor="session_date" className="block text-sm font-medium text-gray-700">Date</label>
+            <input
+              type="date"
+              id="session_date"
+              name="session_date"
+              value={newSessionData.session_date}
+              onChange={handleInputChange}
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="start_time" className="block text-sm font-medium text-gray-700">Start Time</label>
+            <input
+              type="time"
+              id="start_time"
+              name="start_time"
+              value={newSessionData.start_time}
+              onChange={handleInputChange}
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="end_time" className="block text-sm font-medium text-gray-700">End Time</label>
+            <input
+              type="time"
+              id="end_time"
+              name="end_time"
+              value={newSessionData.end_time}
+              onChange={handleInputChange}
+              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
+              required
+            />
+          </div>
+        </div>
+        {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
+        <div className="flex justify-end space-x-2">
+          <button type="button" onClick={onCancel} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">
+            Cancel
+          </button>
+          <button type="submit" disabled={isSubmitting} className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 disabled:bg-blue-300">
+            {isSubmitting ? 'Adding...' : 'Add Session'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
 
-  const handleDeleteSession = async (sessionId) => {
+const ManageSessions = () => {
+  const [courses, setCourses] = useState([]);
+  const [selectedCourse, setSelectedCourse] = useState('');
+  const [sessions, setSessions] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+
+  // Fetch all courses for the dropdown
+  useEffect(() => {
+    const fetchCourses = async () => {
+      try {
+        const response = await getCourses(); // Admin gets all courses
+        setCourses(Array.isArray(response.courses) ? response.courses : []);
+      } catch (err) {
+        setError(err.message || 'Failed to fetch courses.');
+        setCourses([]);
+      }
+    };
+    fetchCourses();
+  }, []);
+
+  // Fetch sessions when a course is selected
+  const fetchSessions = useCallback(async () => {
+    if (!selectedCourse) {
+      setSessions([]);
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await getSessionsForCourse(selectedCourse);
+      setSessions(Array.isArray(response.sessions) ? response.sessions : []);
+    } catch (err) {
+      setError(err.message || 'Failed to fetch sessions.');
+      setSessions([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedCourse]);
+
+  useEffect(() => {
+    fetchSessions();
+  }, [fetchSessions]);
+
+  const handleDelete = async (sessionId) => {
     if (window.confirm('Are you sure you want to delete this session?')) {
       try {
-        // Placeholder API call to delete a session
-        // Use the directly imported deleteSession function
-        await deleteSession(sessionId); // Corrected function call
-        console.log('Session deleted successfully (placeholder)');
-        fetchSessions(); // Refetch sessions after deleting a session
-      } catch (error) {
-        console.error('Error deleting session:', error);
-        // Handle error
+        await deleteSession(sessionId);
+        // Refetch sessions to show the change
+        fetchSessions();
+      } catch (err) {
+        setError(err.response?.data?.message || 'Failed to delete session.');
       }
     }
   };
 
-  const handleExportUsers = () => {
-    // TODO: Implement actual export logic, likely requiring a backend endpoint.
-    console.log('Export Users functionality not implemented yet.');
-  };
-
-  const handleImportUsers = () => {
-    // TODO: Implement actual import logic, likely involving file upload to a backend endpoint.
-    console.log('Import Users functionality not implemented yet.');
-  };
-
-  const handlePrintUsers = () => {
-    // TODO: Implement actual print logic. This might involve generating a printable view or PDF.
-    console.log('Print Users functionality not implemented yet.');
-    // Example: Trigger browser print
-    // window.print();
-  };
-
-  const handleExportSessions = () => {
-    console.log('Export Sessions functionality not implemented yet.');
+  const handleSuccess = () => {
+    fetchSessions(); 
+    setShowAddForm(false);
   };
 
   return (
-    <div className="p-4">
-      <h2 className="text-2xl font-bold mb-4">Manage Sessions</h2>
-      <p>This is where you can create, view, edit, and delete sessions.</p>
-      <div className="mt-4 p-4 border rounded">
-        <h3 className="text-xl font-semibold mb-4">Create New Session</h3>
-        <form onSubmit={handleCreateSession} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label htmlFor="course" className="block text-sm font-medium text-gray-700">Course</label>
-            <input
-              type="text"
-              id="course"
-              name="course"
-              value={newSession.course}
-              onChange={handleInputChange}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-              placeholder="e.g., 60"
-            />
-          </div>
-          <div>
-            <label htmlFor="location" className="block text-sm font-medium text-gray-700">Location (GPS Coordinates - Placeholder)</label>
-            <input
-              type="text" // Consider using a date picker later
-              id="date"
-              name="date"
-              value={newSession.date}
-              onChange={handleInputChange}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-              placeholder="e.g., 40.7128,-74.0060"
-            />
-          </div>
-           <div>
-            <label htmlFor="lecturer" className="block text-sm font-medium text-gray-700">Lecturer</label>
-            <input
-              type="text"
-              id="lecturer"
-              name="lecturer"
-              value={newSession.lecturer}
-              onChange={handleInputChange}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-              placeholder="e.g., Dr. Smith"
-            />
-          </div>
-           <div>
-            <label htmlFor="time" className="block text-sm font-medium text-gray-700">Time</label>
-            <input // Change type to time later if needed
-              type="text" // Consider using a time picker later
-              id="time"
-              name="time"
-              value={newSession.time}
-              onChange={handleInputChange}
-              required
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-              placeholder="e.g., 10:00 AM"
-            />
-          </div>
-          <div className="col-span-full">
+    <div className="container mx-auto p-4">
+      <h1 className="text-2xl font-bold mb-4">Manage Sessions</h1>
 
+      <div className="mb-4">
+        <label htmlFor="course-select" className="block text-sm font-medium text-gray-700">Select a Course to Manage Sessions</label>
+        <select
+          id="course-select"
+          value={selectedCourse}
+          onChange={(e) => setSelectedCourse(e.target.value)}
+          className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
+        >
+          <option value="">-- Select a Course --</option>
+          {courses.map((course) => (
+            <option key={course.id} value={course.id}>
+              {course.name}
+            </option>
+          ))}
+        </select>
+      </div>
 
-          <button
-            type="submit"
-            className="w-full inline-flex justify-center rounded-md border border-transparent bg-indigo-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-          >
-            Create Session
-          </button>
+      {error && <p className="text-red-500 mb-4">Error: {error}</p>}
+      
+      {selectedCourse && (
+        <>
+          <div className="flex justify-end mb-4">
+            {!showAddForm && (
+              <button
+                onClick={() => setShowAddForm(true)}
+                className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600"
+              >
+                Add New Session
+              </button>
+            )}
+          </div>
+
+          {showAddForm && (
+            <SessionForm
+              selectedCourse={selectedCourse}
+              onSuccess={handleSuccess}
+              onCancel={() => setShowAddForm(false)}
+            />
+          )}
+
+          {isLoading ? (
+            <p>Loading sessions...</p>
+          ) : (
+            <div className="bg-white shadow-md rounded-lg mt-4">
+              <ul className="divide-y divide-gray-200">
+                {sessions.length > 0 ? (
+                  sessions.map((session) => (
+                    <li key={session.id} className="p-4 hover:bg-gray-50 flex justify-between items-center">
+                      <div>
+                        <p className="text-lg font-semibold">{new Date(session.session_date).toLocaleDateString()}</p>
+                        <p className="text-sm text-gray-600">
+                          Time: {session.start_time.slice(0, 5)} - {session.end_time.slice(0, 5)}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleDelete(session.id)}
+                        className="px-3 py-1 bg-red-500 text-white rounded-md hover:bg-red-600"
+                      >
+                        Delete
+                      </button>
+                    </li>
+                  ))
+                ) : (
+                  <p className="p-4 text-gray-500">No sessions found. Click "Add New Session" to create one.</p>
+                )}
+              </ul>
             </div>
-        </form>
-      </div>
-      <div className="mt-8">
-        <h3 className="text-xl font-semibold mb-4">Existing Sessions</h3>
-        <div className="flex space-x-4 mb-4">
-          {/* Placeholder buttons for file operations - require backend implementation */}
-          <button onClick={handleExportSessions} className="px-4 py-2 bg-gray-200 rounded">Export Sessions</button>
-          <button onClick={handleImportUsers} className="px-4 py-2 bg-gray-200 rounded">Import Users</button>
-          <button onClick={handlePrintUsers} className="px-4 py-2 bg-gray-200 rounded">Print Report</button>
-        </div>
-        {loading && <p>Loading sessions...</p>}
-        {error && <p className="text-red-500">{error}</p>}
-        {!loading && !error && sessions.length === 0 && <p>No sessions found.</p>}
-        {!loading && !error && sessions.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Course
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Lecturer
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Date
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Time
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {sessions.map((session) => (
-                  <tr key={session.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{session.course}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{session.lecturer}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{session.date}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{session.time}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <button onClick={() => handleEditSession(session)} className="text-indigo-600 hover:text-indigo-900 mr-4">Edit</button>
-                      <button onClick={() => handleDeleteSession(session.id)} className="text-red-600 hover:text-red-900">Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {!loading && !error && sessions.length === 0 && <p>No sessions found.</p>}
-      </div>
+          )}
+        </>
+      )}
     </div>
   );
 };
