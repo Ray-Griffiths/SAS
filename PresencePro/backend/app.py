@@ -365,6 +365,88 @@ def get_lecturers(current_user):
         logger.error(f"Error fetching lecturers: {str(e)}", exc_info=True)
         return jsonify({"message": "Error fetching lecturers"}), 500
 
+# --- Lecturer Dashboard Stats ---
+@app.route('/api/lecturer/dashboard-stats', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_lecturer_dashboard_stats(current_user):
+    """Provides key statistics for the lecturer dashboard."""
+    try:
+        # 1. Total courses taught by the lecturer
+        courses = db.session.query(Course).filter_by(lecturer_id=current_user.id).all()
+        total_courses = len(courses)
+
+        # 2. Total unique students in those courses
+        student_ids = set()
+        for course in courses:
+            for student in course.students:
+                student_ids.add(student.id)
+        total_students = len(student_ids)
+
+        # 3. Total active sessions
+        active_sessions = db.session.query(Session).join(Course).filter(
+            Course.lecturer_id == current_user.id,
+            Session.is_active == True,
+            Session.expires_at > datetime.utcnow()
+        ).count()
+
+        # 4. Average attendance rate
+        total_attendance = 0
+        total_possible_attendance = 0
+        
+        # --- FIX: Query sessions and courses together to fix the AttributeError ---
+        # and prevent an N+1 query problem.
+        sessions_with_courses = db.session.query(Session, Course).join(Course).filter(
+            Course.lecturer_id == current_user.id
+        ).all()
+
+        for session, course in sessions_with_courses:
+            enrolled_count = len(course.students)
+            if enrolled_count > 0:
+                # Count attendance for this specific session
+                attendance_count = db.session.query(Attendance).filter_by(session_id=session.id).count()
+                total_attendance += attendance_count
+                total_possible_attendance += enrolled_count
+        
+        average_attendance_rate = (total_attendance / total_possible_attendance) * 100 if total_possible_attendance > 0 else 0
+
+        stats = {
+            "totalCourses": total_courses,
+            "totalStudents": total_students,
+            "activeSessions": active_sessions,
+            "averageAttendance": f"{average_attendance_rate:.0f}%"
+        }
+        return jsonify(stats), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching lecturer dashboard stats for {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching dashboard statistics"}), 500
+
+# --- Lecturer's Course Management ---
+@app.route('/api/lecturer/courses', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_lecturer_courses(current_user):
+    """Fetches all courses taught by the current lecturer with student counts."""
+    try:
+        # Query for courses taught by the current user
+        courses = db.session.query(Course).filter_by(lecturer_id=current_user.id).all()
+        
+        courses_data = []
+        for course in courses:
+            # For each course, count the number of enrolled students
+            enrolled_count = len(course.students)
+            courses_data.append({
+                'id': course.id,
+                'name': course.name,
+                'description': course.description,
+                'enrolled_students_count': enrolled_count
+            })
+            
+        return jsonify(courses_data), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching courses for lecturer {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching courses"}), 500
+
 @app.route('/api/users', methods=['POST'])
 @role_required(['admin'])
 def create_user(current_user):
@@ -723,7 +805,7 @@ def get_course(course_id):
     total_sessions = db.session.query(Session).filter_by(course_id=course_id).count()
 
     # Calculate total attendance marks (assuming each attendance record is 1 mark)
-    total_attendance_marks = db.session.query(Attendance).join(Attendance.session).filter(Session.course_id == course_id).count()
+    total_attendance_marks = db.session.query(Attendance).join(Session).filter(Session.course_id == course_id).count()
 
     return jsonify({
         'id': course.id,
@@ -995,20 +1077,52 @@ def enroll_students(current_user, course_id):
     if not data or 'student_ids' not in data:
         return jsonify({"message": "Request body must contain 'student_ids' list"}), 400
 
-    student_db_ids = data['student_ids']
-    if not isinstance(student_db_ids, list):
-        return jsonify({"message": "'student_ids' must be a list"}), 400
+    student_identifiers = data['student_ids']
+    if not isinstance(student_identifiers, list):
+        return jsonify({"message": "'student_ids' must be a list of student ID strings"}), 400
 
-    students_to_enroll = db.session.query(Student).filter(Student.id.in_(student_db_ids)).all()
-    if len(students_to_enroll) != len(student_db_ids):
-        # Find which IDs were not found
-        found_ids = {s.id for s in students_to_enroll}
-        not_found_ids = [s_id for s_id in student_db_ids if s_id not in found_ids]
-        return jsonify({"message": f"Students with IDs {not_found_ids} not found"}), 404
+    # Sanitize the list to remove empty strings and duplicates
+    processed_identifiers = list(set([s_id.strip() for s_id in student_identifiers if isinstance(s_id, str) and s_id.strip()]))
+    
+    # Get all existing students matching the provided identifiers
+    existing_students = db.session.query(Student).filter(Student.student_id.in_(processed_identifiers)).all()
+    existing_student_map = {s.student_id: s for s in existing_students}
 
+    newly_created_students_count = 0
+    students_to_process = list(existing_students) # Start with the list of existing students
+
+    # Identify which students need to be created
+    for s_id in processed_identifiers:
+        if s_id not in existing_student_map:
+            # This student does not exist, so create a new one
+            try:
+                # Create the new student with a placeholder name
+                new_student = Student(student_id=s_id, name=f"Student {s_id}")
+                db.session.add(new_student)
+                students_to_process.append(new_student)
+                newly_created_students_count += 1
+            except IntegrityError:
+                # This can happen in a race condition or if the ID was just added.
+                db.session.rollback()
+                student = db.session.query(Student).filter_by(student_id=s_id).first()
+                if student:
+                    students_to_process.append(student) # Add the found student
+                else:
+                    # This case is unlikely but handled for safety.
+                    logger.error(f"Failed to create or find student {s_id} after IntegrityError.")
+                    continue # Skip this problematic ID
+            except Exception as e:
+                db.session.rollback()
+                logger.error(f"Error creating student {s_id}: {str(e)}", exc_info=True)
+                continue # Skip this problematic ID
+
+    # Enroll all found or created students
     enrolled_count = 0
     already_enrolled_count = 0
-    for student in students_to_enroll:
+    # Use a set to ensure each student is processed for enrollment only once
+    unique_students_to_process = list(set(students_to_process))
+
+    for student in unique_students_to_process:
         if student not in course.students:
             course.students.append(student)
             enrolled_count += 1
@@ -1017,16 +1131,35 @@ def enroll_students(current_user, course_id):
 
     try:
         db.session.commit()
-        logger.info(f"{enrolled_count} students enrolled in course {course_id} by {current_user.username}")
+        
+        # Build a descriptive success message for the frontend
+        message_parts = []
+        if enrolled_count > 0:
+            message_parts.append(f"Successfully enrolled {enrolled_count} students.")
+        if newly_created_students_count > 0:
+            # This message assumes placeholder names were used.
+            message_parts.append(f"Created {newly_created_students_count} new student profiles. Please update their names.")
+        if already_enrolled_count > 0:
+            message_parts.append(f"{already_enrolled_count} students were already enrolled.")
+        
+        if not message_parts:
+            message = "No new students were enrolled or created."
+        else:
+            message = " ".join(message_parts)
+
+        logger.info(f"{enrolled_count} students enrolled, {newly_created_students_count} created in course {course_id} by {current_user.username}")
+        
         return jsonify({
-            "message": f"Successfully enrolled {enrolled_count} new students. {already_enrolled_count} students were already enrolled.",
+            "message": message,
             "newly_enrolled_count": enrolled_count,
+            "newly_created_count": newly_created_students_count,
             "already_enrolled_count": already_enrolled_count
         }), 200
+
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Error enrolling students in course {course_id}: {str(e)}", exc_info=True)
-        return jsonify({"message": "Error enrolling students"}), 500
+        logger.error(f"Error committing enrollments for course {course_id}: {str(e)}", exc_info=True)
+        return jsonify({"message": "An unexpected error occurred while enrolling students"}), 500
 
 # --- Unenroll Students from a Course ---
 
@@ -1624,3 +1757,65 @@ def import_students(current_user):
         "failed_count": len(failed_students),
         "failed_students": failed_students
     }), 200
+
+# --- Session Management (Update and Delete) ---
+
+@app.route('/api/sessions/<int:session_id>', methods=['PUT'])
+@role_required(['lecturer', 'admin'])
+def update_session(current_user, session_id):
+    """Allows a lecturer or admin to update a session's details."""
+    session_to_update = db.session.query(Session).get(session_id)
+    if not session_to_update:
+        return jsonify({"message": "Session not found"}), 404
+
+    # Authorization: Ensure the user is an admin or the lecturer for this session's course
+    if not current_user.is_admin and session_to_update.course.lecturer_id != current_user.id:
+        return jsonify({"message": "Unauthorized to update this session"}), 403
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No update data provided"}), 400
+
+    try:
+        if 'session_date' in data:
+            session_to_update.session_date = datetime.strptime(data['session_date'], '%Y-%m-%d').date()
+        if 'start_time' in data:
+            session_to_update.start_time = datetime.strptime(data['start_time'], '%H:%M').time()
+        if 'end_time' in data:
+            session_to_update.end_time = datetime.strptime(data['end_time'], '%H:%M').time()
+        
+        db.session.commit()
+        logger.info(f"Session {session_id} updated by {current_user.username}")
+        return jsonify({"message": "Session updated successfully"}), 200
+
+    except ValueError:
+        db.session.rollback()
+        return jsonify({"message": "Invalid date or time format. Use YYYY-MM-DD and HH:MM."}), 400
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error updating session {session_id}: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while updating the session"}), 500
+
+
+@app.route('/api/sessions/<int:session_id>', methods=['DELETE'])
+@role_required(['lecturer', 'admin'])
+def delete_session(current_user, session_id):
+    """Allows a lecturer or admin to delete a session."""
+    session_to_delete = db.session.query(Session).get(session_id)
+    if not session_to_delete:
+        return jsonify({"message": "Session not found"}), 404
+
+    # Authorization check
+    if not current_user.is_admin and session_to_delete.course.lecturer_id != current_user.id:
+        return jsonify({"message": "Unauthorized to delete this session"}), 403
+
+    try:
+        # The database is set to cascade deletes, so attendance records for this session will also be removed.
+        db.session.delete(session_to_delete)
+        db.session.commit()
+        logger.info(f"Session {session_id} deleted by {current_user.username}")
+        return jsonify({"message": "Session deleted successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error deleting session {session_id}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error deleting session"}), 500

@@ -1,7 +1,7 @@
 import axios from 'axios';
 
+// --- FIX: Removed baseURL to make all paths explicit ---
 const api = axios.create({
-  baseURL: '/api',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -19,19 +19,21 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// --- FIX: Added explicit /api to all paths ---
+
 export const login = async (identifier, password) => {
-  const response = await api.post('/login', { identifier, password });
+  const response = await api.post('/api/login', { identifier, password });
   return response.data;
 };
 
 export const register = async (userData) => {
-  const response = await api.post('/register', userData);
+  const response = await api.post('/api/register', userData);
   return response.data;
 };
 
 export const logoutApi = async () => {
   try {
-    const response = await api.post('/logout', {});
+    const response = await api.post('/api/logout', {});
     if (response.status === 200) {
       localStorage.removeItem('jwt_token');
     }
@@ -43,158 +45,157 @@ export const logoutApi = async () => {
 };
 
 export const fetchUserProfile = async () => {
-  const response = await api.get('/my-profile');
+  const response = await api.get('/api/my-profile');
   return response.data;
 };
 
 export const updateMyProfile = async (profileData) => {
-  const response = await api.put('/my-profile', profileData);
+  const response = await api.put('/api/my-profile', profileData);
   return response.data;
 };
 
 export const getUsers = async (page = 1, per_page = 20) => {
-  const response = await api.get(`/users?page=${page}&per_page=${per_page}`);
+  const response = await api.get(`/api/users?page=${page}&per_page=${per_page}`);
   return response.data;
 };
 
-// Corrected function to pass userData directly
 export const createUser = async (userData) => {
-  const response = await api.post('/users', userData);
+  const response = await api.post('/api/users', userData);
   return response.data;
 };
 
 export const getUser = async (userId) => {
-  const response = await api.get(`/users/${userId}`);
+  const response = await api.get(`/api/users/${userId}`);
   return response.data;
 };
 
 export const updateUser = async (userId, userData) => {
-  const response = await api.put(`/users/${userId}`, userData);
+  const response = await api.put(`/api/users/${userId}`, userData);
   return response.data;
 };
 
 export const deleteUser = async (userId) => {
-  const response = await api.delete(`/users/${userId}`);
+  const response = await api.delete(`/api/users/${userId}`);
   return response.data;
 };
 
 export const getLecturers = async () => {
-    const response = await api.get('/lecturers');
+    const response = await api.get('/api/lecturers');
     return response.data;
 };
 
 export const getCourses = async (page = 1, per_page = 20) => {
-  const response = await api.get(`/courses?page=${page}&per_page=${per_page}`);
+  const response = await api.get(`/api/courses?page=${page}&per_page=${per_page}`);
   return response.data;
 };
 
 export const createCourse = async (courseData) => {
-  const response = await api.post('/courses', courseData);
+  const response = await api.post('/api/courses', courseData);
   return response.data;
 };
 
 export const getCourse = async (courseId) => {
-  const response = await api.get(`/courses/${courseId}`);
+  const response = await api.get(`/api/courses/${courseId}`);
   return response.data;
 };
 
 export const updateCourse = async (courseId, courseData) => {
-  const response = await api.put(`/courses/${courseId}`, courseData);
+  const response = await api.put(`/api/courses/${courseId}`, courseData);
   return response.data;
 };
 
 export const deleteCourse = async (courseId) => {
-  const response = await api.delete(`/courses/${courseId}`);
+  const response = await api.delete(`/api/courses/${courseId}`);
   return response.data;
 };
 
 export const enrollStudents = async (courseId, studentIds) => {
-  const response = await api.post(`/courses/${courseId}/students`, {
+  const response = await api.post(`/api/courses/${courseId}/students`, {
     student_ids: studentIds,
   });
   return response.data;
 };
 
 export const unenrollStudents = async (courseId, studentIds) => {
-  const response = await api.delete(`/courses/${courseId}/students`, {
+  const response = await api.delete(`/api/courses/${courseId}/students`, {
     data: { student_ids: studentIds },
   });
   return response.data;
 };
 
 export const getEnrolledStudents = async (courseId) => {
-  const response = await api.get(`/courses/${courseId}/students`);
+  const response = await api.get(`/api/courses/${courseId}/students`);
   return response.data;
 };
 
 export const getStudents = async (page = 1, per_page = 20, filters = {}) => {
   const params = new URLSearchParams({ page, per_page, ...filters });
-  const response = await api.get(`/students?${params.toString()}`);
+  const response = await api.get(`/api/students?${params.toString()}`);
   return response.data;
 };
 
 export const createStudent = async (studentData) => {
-  const response = await api.post('/students', studentData);
+  const response = await api.post('/api/students', studentData);
   return response.data;
 };
 
 export const getStudent = async (studentDbId) => {
-  const response = await api.get(`/students/${studentDbId}`);
+  const response = await api.get(`/api/students/${studentDbId}`);
   return response.data;
 };
 
 export const updateStudent = async (studentDbId, studentData) => {
-  const response = await api.put(`/students/${studentDbId}`, studentData);
+  const response = await api.put(`/api/students/${studentDbId}`, studentData);
   return response.data;
 };
 
 export const deleteStudent = async (studentDbId) => {
-  const response = await api.delete(`/students/${studentDbId}`);
+  const response = await api.delete(`/api/students/${studentDbId}`);
   return response.data;
 };
 
 export const getSessions = async (page = 1, per_page = 20) => {
-  const response = await api.get(`/sessions?page=${page}&per_page=${per_page}`);
+  const response = await api.get(`/api/sessions?page=${page}&per_page=${per_page}`);
   return response.data;
 };
 
 export const createSession = async (sessionData) => {
-  const response = await api.post('/sessions', sessionData);
+  const response = await api.post('/api/sessions', sessionData);
   return response.data;
 };
 
 export const getSessionsForCourse = async (courseId) => {
-  const response = await api.get(`/courses/${courseId}/sessions`);
+  const response = await api.get(`/api/courses/${courseId}/sessions`);
   return response.data;
 };
 
 export const getSession = async (sessionId) => {
-  const response = await api.get(`/sessions/${sessionId}`);
+  const response = await api.get(`/api/sessions/${sessionId}`);
   return response.data;
 };
 
 export const updateSession = async (sessionId, sessionData) => {
-  const response = await api.put(`/sessions/${sessionId}`, sessionData);
+  const response = await api.put(`/api/sessions/${sessionId}`, sessionData);
   return response.data;
 };
 
 export const deleteSession = async (sessionId) => {
-  const response = await api.delete(`/sessions/${sessionId}`);
+  const response = await api.delete(`/api/sessions/${sessionId}`);
   return response.data;
 };
 
 export const createQrCode = async (sessionId, duration) => {
-  const response = await api.post(`/sessions/${sessionId}/qr`, { duration });
+  const response = await api.post(`/api/sessions/${sessionId}/qr`, { duration });
   return response.data;
 };
 
 export const deactivateQrCode = async (sessionId) => {
-  const response = await api.delete(`/sessions/${sessionId}/qr`);
+  const response = await api.delete(`/api/sessions/${sessionId}/qr`);
   return response.data;
 };
 
 export const getQrCodeStatus = async (sessionId) => {
-  const response = await api.get(`/sessions/${sessionId}/qr`);
+  const response = await api.get(`/api/sessions/${sessionId}/qr`);
   return response.data;
 };
 
@@ -203,7 +204,7 @@ export const recordAttendance = async (
   studentIndexNumber,
   qrCodeUuid
 ) => {
-  const response = await api.post(`/sessions/${sessionId}/attendance`, {
+  const response = await api.post(`/api/sessions/${sessionId}/attendance`, {
     student_index_number: studentIndexNumber,
     qr_code_uuid: qrCodeUuid,
   });
@@ -211,7 +212,7 @@ export const recordAttendance = async (
 };
 
 export const getSessionAttendance = async (sessionId) => {
-  const response = await api.get(`/sessions/${sessionId}/attendance`);
+  const response = await api.get(`/api/sessions/${sessionId}/attendance`);
   return response.data;
 };
 
@@ -221,13 +222,13 @@ export const getStudentAttendance = async (studentDbId, courseId = null) => {
     params.append('course_id', courseId);
   }
   const response = await api.get(
-    `/students/${studentDbId}/attendance?${params.toString()}`
+    `/api/students/${studentDbId}/attendance?${params.toString()}`
   );
   return response.data;
 };
 
 export const getCourseAttendanceSummary = async (courseId) => {
-  const response = await api.get(`/courses/${courseId}/attendance_summary`);
+  const response = await api.get(`/api/courses/${courseId}/attendance_summary`);
   return response.data;
 };
 
@@ -243,26 +244,26 @@ export const getAttendanceReport = async (
   if (endDate) {
     params.append('end_date', endDate);
   }
-  const response = await api.get(`/reports/attendance?${params.toString()}`);
+  const response = await api.get(`/api/reports/attendance?${params.toString()}`);
   return response.data;
 };
 
 export const exportStudents = async (filters = {}, exportFormat = 'csv') => {
   const params = new URLSearchParams({ format: exportFormat, ...filters });
-  const response = await api.get(`/export_students?${params.toString()}`, {
+  const response = await api.get(`/api/export_students?${params.toString()}`, {
     responseType: 'blob',
   });
   return response.data;
 };
 
 export const importStudents = async (studentsData) => {
-  const response = await api.post('/import-students', studentsData);
+  const response = await api.post('/api/import-students', studentsData);
   return response.data;
 };
 
 export const getBackendStatus = async () => {
   try {
-    const response = await api.get('/status');
+    const response = await api.get('/api/status');
     return response.data;
   } catch (error) {
     console.error('Error fetching backend status:', error);
