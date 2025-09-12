@@ -27,6 +27,7 @@ import ViewAttendanceLecturer from './components/lecturer/ViewAttendanceLecturer
 import ManageCourseStudents from './components/lecturer/ManageCourseStudents';
 import ViewSessions from './components/lecturer/ViewSessions';
 import SessionDetails from './components/lecturer/SessionDetails';
+import CourseAttendanceSummary from './components/lecturer/CourseAttendanceSummary'; // CORRECTED IMPORT
 
 // Student Components
 import ScanQrCode from './components/student/ScanQrCode';
@@ -75,8 +76,13 @@ function App() {
           
           <Route path="courses/:courseId/sessions" element={<ViewSessions />} />
           <Route path="courses/:courseId/sessions/:sessionId" element={<SessionDetails />} />
+          
+          {/* This is the new, correct route for the detailed summary page */}
+          <Route path="courses/:courseId/attendance" element={<CourseAttendanceSummary />} />
 
           <Route path="sessions" element={<ManageSessionsLecturer />} />
+          
+          {/* This is the route for the main attendance dashboard (course selection) */}
           <Route path="attendance" element={<ViewAttendanceLecturer />} />
         </Route>
 

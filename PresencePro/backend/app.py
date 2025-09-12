@@ -7,6 +7,8 @@ import traceback
 from flask import Flask, request, Response, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 from flask_migrate import Migrate
 from flask_jwt_extended import create_access_token, jwt_required, JWTManager, get_jwt_identity
 from datetime import datetime, date, time, timedelta, timezone
@@ -421,6 +423,115 @@ def get_lecturer_dashboard_stats(current_user):
     except Exception as e:
         logger.error(f"Error fetching lecturer dashboard stats for {current_user.username}: {str(e)}", exc_info=True)
         return jsonify({"message": "Error fetching dashboard statistics"}), 500
+
+
+@app.route('/api/lecturer/dashboard-charts', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_lecturer_dashboard_charts(current_user):
+    """Provides aggregated data for charts on the lecturer dashboard."""
+    try:
+        # --- 1. Average Attendance by Course (Bar Chart) ---
+        course_attendance_data = []
+        # Eager load students and sessions to prevent N+1 queries inside the loop
+        courses = db.session.query(Course).options(
+            joinedload(Course.students),
+            joinedload(Course.sessions)
+        ).filter_by(lecturer_id=current_user.id).all()
+
+        for course in courses:
+            enrolled_count = len(course.students)
+            session_count = len(course.sessions)
+
+            if enrolled_count > 0 and session_count > 0:
+                total_possible_attendance = enrolled_count * session_count
+                
+                # Count attendance records for all sessions in this course
+                session_ids = [s.id for s in course.sessions]
+                total_actual_attendance = db.session.query(func.count(Attendance.id)).filter(
+                    Attendance.session_id.in_(session_ids)
+                ).scalar() or 0
+
+                average_rate = (total_actual_attendance / total_possible_attendance) * 100
+            else:
+                average_rate = 0
+            
+            course_attendance_data.append({
+                'name': course.name,
+                'attendance': round(average_rate)
+            })
+
+        # --- 2. Student Engagement Breakdown (Donut Chart) ---
+        engagement_tiers = {'High Engagement (>=80%)': 0, 'Medium Engagement (50-79%)': 0, 'Low Engagement (<50%)': 0}
+        
+        # Get all unique students across all lecturer's courses
+        all_students_in_courses = db.session.query(Student).join(Student.courses).filter(
+            Course.lecturer_id == current_user.id
+        ).distinct().all()
+
+        for student in all_students_in_courses:
+            # Query for all sessions of courses the student is enrolled in AND are taught by the current lecturer
+            total_possible_sessions = db.session.query(func.count(Session.id)).join(Course).join(Course.students).filter(
+                Course.lecturer_id == current_user.id,
+                Student.id == student.id
+            ).scalar() or 0
+
+            # Query for all attendance records for this student in sessions taught by the current lecturer
+            attended_sessions_count = db.session.query(func.count(Attendance.id)).join(Session).filter(
+                Attendance.student_id == student.id,
+                Session.course_id.in_([c.id for c in courses]) # Use courses from previous query
+            ).scalar() or 0
+
+            if total_possible_sessions > 0:
+                rate = (attended_sessions_count / total_possible_sessions) * 100
+                if rate >= 80:
+                    engagement_tiers['High Engagement (>=80%)'] += 1
+                elif rate >= 50:
+                    engagement_tiers['Medium Engagement (50-79%)'] += 1
+                else:
+                    engagement_tiers['Low Engagement (<50%)'] += 1
+        
+        student_engagement_data = [{'name': name, 'value': value} for name, value in engagement_tiers.items()]
+
+
+        # --- 3. Recent Session Attendance (Line Chart) ---
+        session_attendance_trend_data = []
+        # Get the last 7 sessions, sorted from oldest to newest for the chart
+        recent_sessions = db.session.query(Session).options(
+            joinedload(Session.course) # Eager load course for its name
+        ).join(Course).filter(
+            Course.lecturer_id == current_user.id
+        ).order_by(Session.session_date.desc(), Session.start_time.desc()).limit(7).all()
+        
+        # Reverse to get chronological order
+        recent_sessions.reverse()
+
+        for session in recent_sessions:
+            # Get enrolled count for the specific course of the session
+            enrolled_count = db.session.query(func.count(Student.id)).join(Student.courses).filter(
+                Course.id == session.course_id
+            ).scalar() or 0
+            
+            if enrolled_count > 0:
+                attended_count = db.session.query(func.count(Attendance.id)).filter_by(session_id=session.id).scalar() or 0
+                attendance_rate = (attended_count / enrolled_count) * 100
+            else:
+                attendance_rate = 0
+            
+            session_attendance_trend_data.append({
+                # Create a concise name for the chart label
+                'name': f"{session.session_date.strftime('%b %d')} - {session.course.name.split(' ')[0]}",
+                'attendance': round(attendance_rate)
+            })
+
+        return jsonify({
+            'courseAttendance': sorted(course_attendance_data, key=lambda x: x['attendance'], reverse=True),
+            'studentEngagement': student_engagement_data,
+            'sessionAttendanceTrend': session_attendance_trend_data
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching lecturer dashboard charts for {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching dashboard chart data"}), 500       
 
 # --- Lecturer's Course Management ---
 @app.route('/api/lecturer/courses', methods=['GET'])
@@ -1617,28 +1728,67 @@ def get_student_attendance(student_id): # Corrected the function definition to i
         logger.error(f"Error calculating student attendance for {student_id}: {str(e)}", exc_info=True)
         return jsonify({"message": "Error calculating attendance"}), 500
 
-@app.route('/api/courses/<int:course_id>/attendance_summary', methods=['GET']) # Corrected indentation
-@jwt_required()
-def get_course_attendance_summary(course_id):
-    current_user_identity = get_jwt_identity()
-    current_user = db.session.query(User).filter_by(username=current_user_identity).first()
-    course = db.session.query(Course).get(course_id)
-    if not course:
-        return jsonify({"message": "Course not found"}), 404
-    if not current_user.is_admin and (current_user.role != 'lecturer' or course.lecturer_id != current_user.id):
-        return jsonify({"message": "Unauthorized to view attendance summary for this course"}), 403
-
-    # Deferred import
-    from utils.attendance import calculate_course_attendance
-    
+@app.route('/api/courses/<int:course_id>/attendance/summary', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_course_attendance_summary(current_user, course_id):
+    """
+    Provides a detailed attendance summary for all students in a given course.
+    Accessible by admins or the course's assigned lecturer.
+    """
     try:
-        attendance_summary = calculate_course_attendance(course_id)
-        return jsonify(attendance_summary), 200
-    except ValueError as e:
-        return jsonify({"message": str(e)}), 404
+        course = db.session.query(Course).get(course_id)
+        if not course:
+            return jsonify({"message": "Course not found"}), 404
+
+        # Authorization check is handled by the role_required decorator, but we add a specific check for the lecturer
+        if not current_user.is_admin and course.lecturer_id != current_user.id:
+            return jsonify({"message": "Unauthorized to view attendance summary for this course"}), 403
+
+        # Get all students enrolled in the course
+        enrolled_students = course.students
+        
+        # Get all sessions for the course
+        total_sessions = db.session.query(Session).filter_by(course_id=course_id).count()
+
+        # Prepare summary list
+        students_summary = []
+        total_attendance_rate_sum = 0
+
+        if total_sessions > 0 and enrolled_students:
+            for student in enrolled_students:
+                # Count the number of sessions the student has attended for this course
+                attended_sessions_count = db.session.query(Attendance).join(Session).filter(
+                    Attendance.student_id == student.id,
+                    Session.course_id == course_id
+                ).count()
+                
+                # Calculate the attendance rate for the student
+                attendance_rate = (attended_sessions_count / total_sessions) * 100
+                
+                students_summary.append({
+                    'student_id': student.student_id,
+                    'student_name': student.name,
+                    'attended_sessions': attended_sessions_count,
+                    'attendance_rate': round(attendance_rate)
+                })
+                total_attendance_rate_sum += attendance_rate
+        
+            # Calculate the overall average attendance for the course
+            average_attendance = (total_attendance_rate_sum / len(enrolled_students))
+        else:
+            average_attendance = 0
+
+
+        return jsonify({
+            'course_name': course.name,
+            'average_attendance': round(average_attendance),
+            'students_summary': sorted(students_summary, key=lambda x: x['student_name']), # Sort by name
+            'total_sessions': total_sessions
+        })
+
     except Exception as e:
-        logger.error(f"Error calculating course attendance for {course_id}: {str(e)}", exc_info=True)
-        return jsonify({"message": "Error calculating attendance"}), 500
+        logger.error(f"Error generating attendance summary for course {course_id}: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while generating the summary"}), 500
 
 # --- Report Generation Route --- # Corrected indentation
 @app.route('/api/reports/attendance', methods=['GET'])
