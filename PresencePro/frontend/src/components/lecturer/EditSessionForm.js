@@ -1,142 +1,116 @@
 import React, { useState, useEffect } from 'react';
-import { updateSession } from '../../services/api';
+import { api } from '../../services/api';
 
 const EditSessionForm = ({ session, onSuccess, onCancel }) => {
-  const [course, setCourse] = useState('');
-  const [lecturer, setLecturer] = useState('');
-  const [date, setDate] = useState('');
-  const [time, setTime] = useState('');
-  const [duration, setDuration] = useState('');
-  const [location, setLocation] = useState('');
+  const [sessionDate, setSessionDate] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [topic, setTopic] = useState('');
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     if (session) {
-      setCourse(session.course || '');
-      setLecturer(session.lecturer || '');
-      setDate(session.date || ''); // Assuming date is in a suitable format
-      setTime(session.time || ''); // Assuming time is in a suitable format
-      setDuration(session.duration || '');
-      setLocation(session.location || '');
+      setSessionDate(session.session_date || '');
+      setStartTime(session.start_time || '');
+      setEndTime(session.end_time || '');
+      setTopic(session.topic || '');
     }
   }, [session]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!session) return; // Prevent submission if no session is being edited
+    setIsLoading(true);
+    setError(null);
 
-    const formData = {
-      course,
-      lecturer,
-      date,
-      time,
-      duration,
-      location,
-    };
-    console.log('Submitting updated session data:', session.id, formData);
+    if (!sessionDate || !startTime || !endTime) {
+      setError('Please fill out all fields.');
+      setIsLoading(false);
+      return;
+    }
 
     try {
-      // Placeholder for actual API call to update session
-      // Use the directly imported updateSession function
-      await updateSession(session.id, formData); // Corrected function call
-      console.log('Session updated successfully (placeholder)');
-      if (onSuccess) {
-        onSuccess(); // Notify parent component
-      }
-    } catch (error) {
-      console.error('Error updating session (placeholder):', error);
-      // Handle error (e.g., display error message)
+      const sessionData = {
+        session_date: sessionDate,
+        start_time: startTime,
+        end_time: endTime,
+        topic: topic,
+      };
+      await api.put(`/api/sessions/${session.id}`, sessionData);
+      onSuccess();
+    } catch (err) {
+      const errorMessage = err.response?.data?.message || `Failed to update session: ${err.message}`;
+      setError(errorMessage);
+    } finally {
+      setIsLoading(false);
     }
   };
 
+  if (!session) return null;
+
   return (
-    <div className="mt-4 p-4 border rounded-md shadow-sm bg-gray-50">
-      <h3 className="text-xl font-bold text-gray-800 mb-4">Edit Session</h3>
-      {session ? (
+    <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex justify-center items-center z-50">
+      <div className="bg-white p-6 rounded-lg shadow-2xl w-full max-w-lg relative">
+        <button onClick={onCancel} className="absolute top-3 right-3 text-gray-500 hover:text-gray-800 text-2xl font-bold">&times;</button>
+        <h3 className="text-2xl font-bold mb-4 text-gray-800">Edit Session</h3>
+
+        {error && <div className="p-3 mb-4 bg-red-100 text-red-700 rounded-md"><strong>Error:</strong> {error}</div>}
+
         <form onSubmit={handleSubmit}>
           <div className="mb-4">
-            <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="editCourse">Course:</label>
-            <input
-              type="text"
-              id="editCourse"
-              value={course}
-              onChange={(e) => setCourse(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-600"
-              required
-            />
-          </div>
-          <div className="mb-4">
-            <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="editLecturer">Lecturer:</label>
-            <input
-              type="text"
-              id="editLecturer"
-              value={lecturer}
-              onChange={(e) => setLecturer(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-600"
-              required
-            />
-          </div>
-          <div className="mb-4">
-            <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="editDate">Date:</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Session Date</label>
             <input
               type="date"
-              id="editDate"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-600"
+              className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              value={sessionDate}
+              onChange={(e) => setSessionDate(e.target.value)}
               required
             />
           </div>
+
           <div className="mb-4">
-            <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="editTime">Time:</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
             <input
               type="time"
-              id="editTime"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-600"
+              className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
               required
             />
           </div>
-           <div className="mb-4">
-            <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="editDuration">Duration:</label>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">End Time</label>
             <input
-              type="text"
-              id="editDuration"
-              value={duration}
-              onChange={(e) => setDuration(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-600"
-              placeholder="e.g., 1 hour 30 minutes"
+              type="time"
+              className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              required
             />
           </div>
-           <div className="mb-4">
-            <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="editLocation">Location:</label>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Topic</label>
             <input
               type="text"
-              id="editLocation"
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-1 focus:ring-blue-600"
+              className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder="e.g., Introduction to React"
             />
           </div>
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={onCancel}
-              className="mr-2 px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-opacity-50"
-            >
+
+          <div className="flex justify-end space-x-2 mt-6">
+            <button type="button" onClick={onCancel} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded transition-colors">
               Cancel
             </button>
-            <button
-              type="submit"
-              className="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-opacity-50"
-            >
-              Update Session
+            <button type="submit" disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:bg-blue-300">
+              {isLoading ? 'Updating...' : 'Update Session'}
             </button>
           </div>
         </form>
-      ) : (
-        <p>Loading session data...</p>
-      )}
+      </div>
     </div>
   );
 };

@@ -25,7 +25,8 @@ import ManageCoursesLecturer from './components/lecturer/ManageCoursesLecturer';
 import ManageSessionsLecturer from './components/lecturer/ManageSessionsLecturer';
 import ViewAttendanceLecturer from './components/lecturer/ViewAttendanceLecturer';
 import ManageCourseStudents from './components/lecturer/ManageCourseStudents';
-import ViewSessions from './components/lecturer/ViewSessions'; // Import the ViewSessions component
+import ViewSessions from './components/lecturer/ViewSessions';
+import SessionDetails from './components/lecturer/SessionDetails';
 
 // Student Components
 import ScanQrCode from './components/student/ScanQrCode';
@@ -72,24 +73,21 @@ function App() {
           <Route path="courses" element={<ManageCoursesLecturer />} />
           <Route path="courses/:courseId/students" element={<ManageCourseStudents />} />
           
-          {/* This new route allows navigation to a specific course's sessions */}
           <Route path="courses/:courseId/sessions" element={<ViewSessions />} />
+          <Route path="courses/:courseId/sessions/:sessionId" element={<SessionDetails />} />
 
           <Route path="sessions" element={<ManageSessionsLecturer />} />
           <Route path="attendance" element={<ViewAttendanceLecturer />} />
         </Route>
 
         {/* --- FIX: Public Route for QR Code Scanning --- */}
-        {/* This route is now public and does not require a login */}
         <Route path="/student/scan-qr" element={<ScanQrCode />} />
 
         {/* --- FIX: Protected Student Routes --- */}
-        {/* Other student routes remain protected */}
         <Route 
           path="/student" 
           element={<ProtectedRoute roles={['student']}><StudentDashboard /></ProtectedRoute>}
         >
-          {/* Default student route is now my-attendance */}
           <Route index element={<Navigate to="my-attendance" replace />} />
           <Route path="my-attendance" element={<ViewMyAttendance />} />
           <Route path="profile" element={<UpdateProfile />} />

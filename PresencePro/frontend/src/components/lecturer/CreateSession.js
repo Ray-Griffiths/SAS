@@ -5,6 +5,7 @@ const CreateSessionModal = ({ isOpen, onClose, courseId, onSessionCreated }) => 
   const [sessionDate, setSessionDate] = useState('');
   const [startTime, setStartTime] = useState('');
   const [endTime, setEndTime] = useState('');
+  const [topic, setTopic] = useState('');
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -27,6 +28,7 @@ const CreateSessionModal = ({ isOpen, onClose, courseId, onSessionCreated }) => 
         session_date: sessionDate,
         start_time: startTime,
         end_time: endTime,
+        topic: topic,
       };
       await api.post(`/api/courses/${courseId}/sessions`, sessionData);
       onSessionCreated(); // This will trigger a refresh in the parent
@@ -78,6 +80,17 @@ const CreateSessionModal = ({ isOpen, onClose, courseId, onSessionCreated }) => 
               value={endTime}
               onChange={(e) => setEndTime(e.target.value)}
               required
+            />
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Topic</label>
+            <input
+              type="text"
+              className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder="e.g., Introduction to React"
             />
           </div>
 

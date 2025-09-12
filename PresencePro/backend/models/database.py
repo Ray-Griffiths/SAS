@@ -71,6 +71,7 @@ class Session(db.Model):
     session_date = Column(Date, nullable=False)
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)
+    topic = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=False, nullable=False)
     qr_code_uuid = Column(String(36), nullable=True)
     expires_at = Column(DateTime, nullable=True)
