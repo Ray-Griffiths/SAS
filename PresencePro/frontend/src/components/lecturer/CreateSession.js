@@ -1,160 +1,98 @@
 import React, { useState } from 'react';
-import { createSession } from '../../services/api'; // Corrected named import for api
-import { QRCodeCanvas } from 'qrcode.react'; // Corrected named import for qrcode.react
+import { api } from '../../services/api';
 
-const CreateSession = () => {
-  const [qrCodeValue, setQrCodeValue] = useState(''); // State for QR code value
-  const [formData, setFormData] = useState({
-    sessionName: '',
-    sessionDate: '',
-    sessionTime: '',
-    sessionDuration: '', // Added duration field
-    sessionLocation: '',
-  });
+const CreateSessionModal = ({ isOpen, onClose, courseId, onSessionCreated }) => {
+  const [sessionDate, setSessionDate] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.id]: e.target.value });
-  };
+  if (!isOpen) return null;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log('Form submitted:', formData);
+    setIsLoading(true);
+    setError(null);
 
-    // Basic validation
-    if (
-      !formData.sessionName ||
-      !formData.sessionDate ||
-      !formData.sessionTime ||
-      !formData.sessionDuration ||
-      !formData.sessionLocation
-    ) {
-      alert('Please fill in all required fields.');
+    if (!sessionDate || !startTime || !endTime) {
+      setError('Please fill out all fields.');
+      setIsLoading(false);
       return;
     }
 
     try {
-      // Placeholder for the actual API call to create a session
-      // Use the directly imported createSession function
-      const response = await createSession(formData); // Corrected function call
-      console.log('Session created successfully!');
-
-      // Optionally reset the form or show a success message
-      // Generate QR code value using session ID or other relevant data
-      setQrCodeValue(response.sessionId ? `session:${response.sessionId}` : JSON.stringify(formData)); // Use session ID from response
-      setFormData({
-        sessionName: '',
-        sessionDate: '',
-        sessionTime: '',
-        sessionDuration: '',
-        sessionLocation: '',
-      });
-    } catch (error) {
-      console.error('Error creating session:', error);
-      // Handle errors (e.g., display an error message to the user)
+      const sessionData = {
+        course_id: courseId,
+        session_date: sessionDate,
+        start_time: startTime,
+        end_time: endTime,
+      };
+      await api.post(`/api/courses/${courseId}/sessions`, sessionData);
+      onSessionCreated(); // This will trigger a refresh in the parent
+      onClose(); // Close the modal on success
+    } catch (err) {
+      const errorMessage = err.response?.data?.message || `Failed to create session: ${err.message}`;
+      setError(errorMessage);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="container mx-auto px-4 py-6">
-      <h2 className="text-2xl font-bold text-gray-800 mb-6">Create Session</h2>
-      <form onSubmit={handleSubmit} className="bg-white shadow-md rounded-lg px-8 pt-6 pb-8 mb-4">
-        {/* Course Name */}
-        <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="sessionName">
-            Course Name:
-          </label>
-          <input
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-1 focus:ring-blue-600"
-            id="sessionName"
-            type="text"
-            placeholder="e.g., Introduction to Programming"
-            value={formData.sessionName}
-            onChange={handleChange}
-            required
-          />
-        </div>
-        {/* Date */}
-        <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="sessionDate">
-            Date:
-          </label>
-          <input
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-1 focus:ring-blue-600"
-            id="sessionDate"
-            type="date"
-            value={formData.sessionDate}
-            onChange={handleChange}
-            required
-          />
-        </div>
-        {/* Time */}
-        <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="sessionTime">
-            Time:
-          </label>
-          <input
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-1 focus:ring-blue-600"
-            id="sessionTime"
-            type="time"
-            value={formData.sessionTime}
-            onChange={handleChange}
-            required
-          />
-        </div>
-        {/* Duration */}
-        <div className="mb-4">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="sessionDuration">
-            Duration (minutes):
-          </label>
-          <input
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-1 focus:ring-blue-600"
-            id="sessionDuration"
-            type="number"
-            placeholder="e.g., 60"
-            value={formData.sessionDuration}
-            onChange={handleChange}
-            required
-          />
-        </div>
-        {/* Location */}
-        <div className="mb-6">
-          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="sessionLocation">
-            Location:
-          </label>
-          <input
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:ring-1 focus:ring-blue-600"
-            id="sessionLocation"
-            type="text"
-            placeholder="e.g., Room 101"
-            value={formData.sessionLocation}
-            onChange={handleChange}
-            required
-          />
-        </div>
-        {/* Submit Button */}
-        <div className="flex items-center justify-between">
+    <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex justify-center items-center z-50">
+      <div className="bg-white p-6 rounded-lg shadow-2xl w-full max-w-lg relative">
+        <button onClick={onClose} className="absolute top-3 right-3 text-gray-500 hover:text-gray-800 text-2xl font-bold">&times;</button>
+        <h3 className="text-2xl font-bold mb-4 text-gray-800">Create New Session</h3>
+
+        {error && <div className="p-3 mb-4 bg-red-100 text-red-700 rounded-md"><strong>Error:</strong> {error}</div>}
+
+        <form onSubmit={handleSubmit}>
           <div className="mb-4">
-            <button
-              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-opacity-50"
-              type="submit"
-            >
-              Create Session
+            <label className="block text-sm font-medium text-gray-700 mb-1">Session Date</label>
+            <input
+              type="date"
+              className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              value={sessionDate}
+              onChange={(e) => setSessionDate(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
+            <input
+              type="time"
+              className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">End Time</label>
+            <input
+              type="time"
+              className="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              required
+            />
+          </div>
+
+          <div className="flex justify-end space-x-2 mt-6">
+            <button type="button" onClick={onClose} className="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded transition-colors">
+              Cancel
+            </button>
+            <button type="submit" disabled={isLoading} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:bg-blue-300">
+              {isLoading ? 'Creating...' : 'Create Session'}
             </button>
           </div>
-        </div>
-      </form>
-
-      {/* QR Code Display */}
-      {qrCodeValue && (
-        <div className="mt-6 p-4 border rounded-md bg-gray-100 text-center">
-          <h3 className="text-xl font-bold text-gray-800 mb-4">Session QR Code</h3>
-          {/* Use QRCodeCanvas component */}
-          <QRCodeCanvas value={qrCodeValue} size={256} level="H" />
-          <p className="mt-4 text-gray-700">Scan this QR code for attendance.</p>
-        </div>
-      )}
+        </form>
+      </div>
     </div>
   );
 };
 
-export default CreateSession;
+export default CreateSessionModal;
