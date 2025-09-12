@@ -25,7 +25,6 @@ class User(db.Model):
     student_profile = relationship('Student', uselist=False, backref='user_account')
     courses_taught = relationship('Course', backref='lecturer_user')
     
-    # FIX: Replaced unique=True with explicit named constraints
     __table_args__ = (
         db.UniqueConstraint('username', name='_user_username_uc'),
         db.UniqueConstraint('email', name='_user_email_uc'),
@@ -42,9 +41,8 @@ class Student(db.Model):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
 
     courses = relationship('Course', secondary=student_course_association, backref='students')
-    attendance_records = relationship('Attendance', backref='student_details')
+    attendance_records = relationship('Attendance', backref='student')
 
-    # FIX: Replaced unique=True with explicit named constraints
     __table_args__ = (
         db.UniqueConstraint('student_id', name='_student_student_id_uc'),
         db.UniqueConstraint('email', name='_student_email_uc'),
@@ -60,9 +58,8 @@ class Course(db.Model):
     total_sessions = Column(Integer, default=0)
     total_attendance_marks = Column(Integer, default=0)
 
-    sessions = relationship('Session', backref='course_details', cascade="all, delete-orphan")
+    sessions = relationship('Session', back_populates='course', cascade="all, delete-orphan")
     
-    # FIX: Replaced unique=True with explicit named constraint
     __table_args__ = (
         db.UniqueConstraint('name', name='_course_name_uc'),
     )
@@ -78,8 +75,8 @@ class Session(db.Model):
     qr_code_uuid = Column(String(36), nullable=True)
     expires_at = Column(DateTime, nullable=True)
     qr_code_data = Column(String, nullable=True)
-    lecturer_id = Column(Integer, ForeignKey('users.id'), nullable=True)
 
+    course = relationship('Course', back_populates='sessions')
     attendance_records = relationship('Attendance', backref='session_details', cascade="all, delete-orphan")
 
 class Attendance(db.Model):

@@ -79,13 +79,18 @@ function App() {
           <Route path="attendance" element={<ViewAttendanceLecturer />} />
         </Route>
 
-        {/* Student Routes */}
+        {/* --- FIX: Public Route for QR Code Scanning --- */}
+        {/* This route is now public and does not require a login */}
+        <Route path="/student/scan-qr" element={<ScanQrCode />} />
+
+        {/* --- FIX: Protected Student Routes --- */}
+        {/* Other student routes remain protected */}
         <Route 
           path="/student" 
           element={<ProtectedRoute roles={['student']}><StudentDashboard /></ProtectedRoute>}
         >
-          <Route index element={<Navigate to="scan-qr" replace />} />
-          <Route path="scan-qr" element={<ScanQrCode />} />
+          {/* Default student route is now my-attendance */}
+          <Route index element={<Navigate to="my-attendance" replace />} />
           <Route path="my-attendance" element={<ViewMyAttendance />} />
           <Route path="profile" element={<UpdateProfile />} />
         </Route>

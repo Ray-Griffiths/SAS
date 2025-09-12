@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+import uuid
 import csv
 import traceback
 from flask import Flask, request, Response, jsonify
@@ -1232,99 +1233,90 @@ def get_enrolled_students(course_id):
     return jsonify({"students": students_data}), 200
 
 # --- Session Management Routes ---
-@app.route('/api/sessions', methods=['POST'])
-@role_required(['lecturer', 'admin'])
-def create_session(current_user):
-    data = request.get_json()
-    if not data:
-        return jsonify({"message": "No input data provided"}), 400
-
-    course_id = data.get('course_id')
-    session_date_str = data.get('session_date')
-    start_time_str = data.get('start_time')
-    end_time_str = data.get('end_time')
-
-    if not course_id or not session_date_str or not start_time_str or not end_time_str:
-        return jsonify({"message": "course_id, session_date, start_time, and end_time are required"}), 400
-
-    course = db.session.query(Course).get(course_id)
-    if not course:
-        return jsonify({"message": "Course not found"}), 404
-    if not current_user.is_admin and course.lecturer_id != current_user.id:
-        return jsonify({"message": "Unauthorized to create a session for this course"}), 403
-
-    try:
-        session_date = datetime.strptime(session_date_str, '%Y-%m-%d').date()
-        start_time = datetime.strptime(start_time_str, '%H:%M').time()
-        end_time = datetime.strptime(end_time_str, '%H:%M').time()
-        
-        # Check if a session already exists for this course on this date
-        if db.session.query(Session).filter_by(course_id=course_id, session_date=session_date).first():
-            return jsonify({"message": f"A session for course {course_id} on {session_date_str} already exists"}), 409
-    except ValueError:
-        return jsonify({"message": "Invalid date or time format. Use YYYY-MM-DD and HH:MM."}), 400
-
-    try:
-        new_session = Session(
-            course_id=course_id,
-            session_date=session_date,
-            start_time=start_time,
-            end_time=end_time
-        )
-        db.session.add(new_session)
-        db.session.commit()
-        logger.info(f"Session {new_session.id} created for course {course_id} by {current_user.username}")
-        return jsonify({
-            "message": "Session created successfully",
-            "session_id": new_session.id,
-            "session_date": str(new_session.session_date),
-            "start_time": str(new_session.start_time),
-            "end_time": str(new_session.end_time)
-        }), 201
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Error creating session for course {course_id}: {str(e)}", exc_info=True)
-        return jsonify({"message": "Error creating session"}), 500
-
-@app.route('/api/courses/<int:course_id>/sessions', methods=['GET'])
+@app.route('/api/courses/<int:course_id>/sessions', methods=['GET', 'POST'])
 @jwt_required()
-def get_sessions_for_course(course_id):
+def handle_course_sessions(course_id):
+    """
+    Handles GET requests to retrieve all sessions for a course and
+    POST requests to create a new session for a course.
+    """
     current_user_identity = get_jwt_identity()
     current_user = db.session.query(User).filter_by(username=current_user_identity).first()
     course = db.session.query(Course).get(course_id)
-    
+
     if not course:
         return jsonify({"message": "Course not found"}), 404
 
-    # Authorization: Admin, the course's lecturer, or an enrolled student
+    # Authorization check
     is_authorized = current_user.is_admin or (current_user.role == 'lecturer' and course.lecturer_id == current_user.id)
-    
     if not is_authorized and current_user.role == 'student':
         student = db.session.query(Student).filter_by(user_id=current_user.id).first()
         if student and course in student.courses:
             is_authorized = True
 
     if not is_authorized:
-        return jsonify({"message": "Unauthorized to access sessions for this course"}), 403
+        return jsonify({"message": "Unauthorized action for this course"}), 403
 
-    sessions = db.session.query(Session).filter_by(course_id=course_id).order_by(Session.session_date.desc(), Session.start_time.desc()).all()
-    sessions_data = [
-        {
-            'id': session.id,
-            'course_id': session.course_id,
-            'session_date': str(session.session_date),
-            'start_time': str(session.start_time),
-            'end_time': str(session.end_time),
-            'is_active': session.is_active
-        } for session in sessions
-    ]
-    return jsonify({"sessions": sessions_data}), 200
+    # --- HANDLE POST REQUEST (CREATE SESSION) ---
+    if request.method == 'POST':
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "No input data provided"}), 400
+
+        session_date_str = data.get('session_date')
+        start_time_str = data.get('start_time')
+        end_time_str = data.get('end_time')
+
+        if not session_date_str or not start_time_str or not end_time_str:
+            return jsonify({"message": "session_date, start_time, and end_time are required"}), 400
+
+        try:
+            session_date = datetime.strptime(session_date_str, '%Y-%m-%d').date()
+            start_time = datetime.strptime(start_time_str, '%H:%M').time()
+            end_time = datetime.strptime(end_time_str, '%H:%M').time()
+        except ValueError:
+            return jsonify({"message": "Invalid date or time format. Use YYYY-MM-DD and HH:MM."}), 400
+
+        try:
+            new_session = Session(
+                course_id=course_id,
+                session_date=session_date,
+                start_time=start_time,
+                end_time=end_time
+            )
+            db.session.add(new_session)
+            db.session.commit()
+            logger.info(f"Session {new_session.id} created for course {course_id} by {current_user.username}")
+            return jsonify({
+                "message": "Session created successfully",
+                "session_id": new_session.id,
+            }), 201
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error creating session for course {course_id}: {str(e)}", exc_info=True)
+            return jsonify({"message": "Error creating session"}), 500
+
+    # --- HANDLE GET REQUEST (LIST SESSIONS) ---
+    if request.method == 'GET':
+        sessions = db.session.query(Session).filter_by(course_id=course_id).order_by(Session.session_date.desc(), Session.start_time.desc()).all()
+        sessions_data = [
+            {
+                'id': session.id,
+                'course_id': session.course_id,
+                'session_date': str(session.session_date),
+                'start_time': str(session.start_time),
+                'end_time': str(session.end_time),
+                'is_active': session.is_active
+            } for session in sessions
+        ]
+        return jsonify({"sessions": sessions_data}), 200
 
 # --- Attendance Routes ---
 # Removed `/attendance/<int:attendance_id>` as it's not present in the code.
-@app.route('/api/sessions/<int:session_id>/qr', methods=['POST']) # Corrected indentation
+@app.route('/api/sessions/<int:session_id>/qr', methods=['POST'])
 @role_required(['lecturer', 'admin'])
 def create_qr_code(current_user, session_id):
+    """Generates a unique QR code for a session, making it active and deactivating others for the same course."""
     session = db.session.query(Session).get(session_id)
     if not session:
         return jsonify({"message": "Session not found"}), 404
@@ -1332,33 +1324,37 @@ def create_qr_code(current_user, session_id):
         return jsonify({"message": "Unauthorized to create QR code for this session"}), 403
 
     data = request.get_json() or {}
-    duration_minutes = data.get('duration', 5) # Default to 5 minutes
-    if not isinstance(duration_minutes, int) or duration_minutes <= 0:
-        return jsonify({"message": "Duration must be a positive integer"}), 400
+    duration_minutes = data.get('duration', 10)
 
     try:
-        # Check if a QR code is already active for this session
-        if session.is_active:
-            return jsonify({
-                "message": "QR code is already active for this session.",
-                "qr_code_data": session.qr_code_data,
-                "expires_at": session.expires_at.isoformat()
-            }), 409
+        # Deactivate other active sessions for the same course
+        Session.query.filter(
+            Session.course_id == session.course_id,
+            Session.is_active == True
+        ).update({"is_active": False})
 
+        # Activate the current session and set its properties
         session.is_active = True
         session.expires_at = datetime.utcnow() + timedelta(minutes=duration_minutes)
-        # We need a stable identifier for the QR code. Let's use a UUID.
-        # This prevents students from just re-using the same session ID.
-        # Let's generate a new UUID for each QR code generation.
         session.qr_code_uuid = str(uuid4())
-        session.qr_code_data = generate_qr_code_data(session.qr_code_uuid)
-        db.session.commit() # Corrected indentation
+
+        # --- FIX: Construct the full URL for the QR code ---
+        # This URL points to your frontend's scanning page.
+        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+        full_scan_url = f"{frontend_url}/student/scan-qr?session_id={session_id}&uuid={session.qr_code_uuid}"
+        
+        # --- FIX: Generate the QR code from the full URL ---
+        session.qr_code_data = generate_qr_code_data(full_scan_url)
+
+        db.session.commit()
         logger.info(f"QR code generated for session {session_id} by {current_user.username}")
+        
         return jsonify({
             "message": "QR code generated successfully",
             "qr_code_data": session.qr_code_data,
             "expires_at": session.expires_at.isoformat()
         }), 201
+
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error generating QR code for session {session_id}: {str(e)}", exc_info=True)
@@ -1414,56 +1410,49 @@ def get_qr_code_status(session_id):
             "is_active": False
         }), 200
 
-@app.route('/api/sessions/<int:session_id>/attendance', methods=['POST']) # Corrected indentation
-@jwt_required()
+@app.route('/api/sessions/<int:session_id>/attendance', methods=['POST'])
 def mark_attendance(session_id):
-    current_user_identity = get_jwt_identity()
-    current_user = db.session.query(User).filter_by(username=current_user_identity).first() # Keep for logging/context
-    if not current_user:
-         return jsonify({"status": "error", "message": "Invalid token or user not found"}), 401
-
     session = db.session.query(Session).get(session_id)
     if not session:
         return jsonify({"status": "error", "message": "Session not found"}), 404
 
     data = request.get_json()
-    # Ensure data is not None before accessing keys
     if not data:
         return jsonify({"status": "error", "message": "Request body must be JSON"}), 400
+
     student_index_number = data.get('student_index_number', '').strip()
     qr_code_uuid = data.get('qr_code_uuid', '').strip()
 
-    if not student_index_number or not qr_code_uuid: # Both are required for this flow
+    if not student_index_number or not qr_code_uuid:
         return jsonify({"status": "error", "message": "Student index number and QR code data are required"}), 400
 
     student = db.session.query(Student).filter_by(student_id=student_index_number).first()
     if not student:
         return jsonify({"status": "error", "message": f"Student with index number {student_index_number} not found"}), 404
 
-    # Check if the student is enrolled in the course for this session
     if student not in session.course.students:
-        # Log enrollment failure attempt
         logger.warning(f"Attendance attempt for non-enrolled student {student_index_number} in session {session_id}")
-        return jsonify({"status": "error", "message": "You are not enrolled in this course"}), 403 # Use 403 Forbidden
+        return jsonify({"status": "error", "message": "You are not enrolled in this course"}), 403
 
-    # Check if QR code is active, not expired, and matches the provided UUID
     if not session.is_active or session.expires_at <= datetime.utcnow() or session.qr_code_uuid != qr_code_uuid:
-         # Provide more specific messages for different failure reasons
          if not session.is_active:
-              return jsonify({"status": "error", "message": "Attendance is not currently being taken for this session."}), 403 # Use 403 Forbidden
-         elif session.expires_at <= datetime.utcnow(): # Use elif to avoid combining messages
-             return jsonify({"status": "error", "message": "QR code has expired. Please get the latest QR code."}), 403 # Use 403 Forbidden
-         else: # This means session is active and not expired, but QR UUID doesn't match
-              return jsonify({"status": "error", "message": "Invalid QR code. Please scan the correct QR code for this session."}), 400 # Use 400 Bad Request
-    # Check for duplicate attendance
+              return jsonify({"status": "error", "message": "Attendance is not currently being taken for this session."}), 403
+         elif session.expires_at <= datetime.utcnow():
+             return jsonify({"status": "error", "message": "QR code has expired. Please get the latest QR code."}), 403
+         else:
+              return jsonify({"status": "error", "message": "Invalid QR code. Please scan the correct QR code for this session."}), 400
+
     existing_attendance = db.session.query(Attendance).filter_by(session_id=session_id, student_id=student.id).first()
     if existing_attendance:
         return jsonify({"status": "error", "message": "Attendance already marked for this session"}), 409
     
     try:
+        # --- THIS IS THE FIX ---
+        # We must provide a 'status' when creating the attendance record.
         new_attendance = Attendance(
             session_id=session_id,
             student_id=student.id,
+            status='present',  # Set the status explicitly
             timestamp=datetime.utcnow()
         )
         db.session.add(new_attendance)
@@ -1474,29 +1463,6 @@ def mark_attendance(session_id):
         db.session.rollback()
         logger.error(f"Error marking attendance for student {student.id} in session {session_id}: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": "An error occurred while marking attendance."}), 500
-
-@app.route('/api/sessions/<int:session_id>/attendance', methods=['GET']) # Corrected indentation
-@jwt_required()
-def get_session_attendance(session_id):
-    current_user_identity = get_jwt_identity()
-    current_user = db.session.query(User).filter_by(username=current_user_identity).first()
-    session = db.session.query(Session).get(session_id)
-
-    if not session:
-        return jsonify({"message": "Session not found"}), 404
-    if not current_user.is_admin and (current_user.role != 'lecturer' or session.course.lecturer_id != current_user.id):
-        return jsonify({"message": "Unauthorized to view attendance for this session"}), 403
-
-    attendance_records = db.session.query(Attendance).filter_by(session_id=session_id).all()
-    attendance_data = [
-        {
-            'attendance_id': record.id,
-            'student_id': record.student_id,
-            'student_name': record.student.name if record.student else 'N/A',
-            'timestamp': record.timestamp.isoformat()
-        } for record in attendance_records
-    ]
-    return jsonify({"session_id": session_id, "attendance": attendance_data}), 200
 
 @app.route('/api/my-attendance', methods=['GET'])
 @jwt_required()
@@ -1819,3 +1785,32 @@ def delete_session(current_user, session_id):
         db.session.rollback()
         logger.error(f"Error deleting session {session_id}: {str(e)}", exc_info=True)
         return jsonify({"message": "Error deleting session"}), 500
+
+@app.route('/api/sessions/<int:session_id>/attendance', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_session_attendance_list(current_user, session_id):
+    """Fetches all attendance records for a specific session."""
+    session = db.session.query(Session).get(session_id)
+    if not session:
+        return jsonify({"message": "Session not found"}), 404
+
+    # Authorization: Ensure the current user is the lecturer for this course or an admin
+    if not current_user.is_admin and session.course.lecturer_id != current_user.id:
+        return jsonify({"message": "You are not authorized to view this session's attendance"}), 403
+
+    # Corrected Query: This joins the two tables and returns tuples of (Attendance, Student)
+    attendance_records = db.session.query(Attendance, Student).join(
+        Student, Attendance.student_id == Student.id
+    ).filter(Attendance.session_id == session_id).all()
+
+    attendance_data = []
+    # Corrected Loop: This correctly unpacks the tuple into 'attendance' and 'student'
+    for attendance, student in attendance_records:
+        attendance_data.append({
+            "student_id": student.student_id,
+            "student_name": student.name,
+            "timestamp": attendance.timestamp.isoformat() + 'Z',
+            "status": attendance.status
+        })
+
+    return jsonify(attendance_data), 200
