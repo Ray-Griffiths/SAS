@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
 import { useNavigate } from 'react-router-dom';
-import CourseForm from './CourseForm'; // Assuming CourseForm is correctly set up for lecturers
+import CourseForm from './CourseForm';
+import { FaUsers, FaClipboardList, FaEdit, FaTrash, FaPlus } from 'react-icons/fa';
 
 const ManageCoursesLecturer = () => {
   const [courses, setCourses] = useState([]);
@@ -15,7 +16,6 @@ const ManageCoursesLecturer = () => {
     try {
       setLoading(true);
       setError(null);
-      // This endpoint is designed to fetch only the courses for the logged-in lecturer
       const response = await api.get('/api/lecturer/courses');
       setCourses(response.data || []);
     } catch (err) {
@@ -31,13 +31,7 @@ const ManageCoursesLecturer = () => {
     fetchLecturerCourses();
   }, []);
 
-  const handleManageStudents = (courseId) => {
-    navigate(`/lecturer/courses/${courseId}/students`);
-  };
-
-  // --- THIS FUNCTION IS NOW FIXED ---
   const handleViewSessions = (courseId) => {
-    // This now navigates to the specific sessions page for the course
     navigate(`/lecturer/courses/${courseId}/sessions`);
   };
 
@@ -70,7 +64,7 @@ const ManageCoursesLecturer = () => {
   };
 
   if (loading) {
-    return <div className="flex justify-center items-center h-full"><p className="text-lg text-gray-500">Loading courses...</p></div>;
+    return <div className="flex justify-center items-center h-screen"><p className="text-lg text-gray-500">Loading courses...</p></div>;
   }
 
   if (error) {
@@ -78,84 +72,84 @@ const ManageCoursesLecturer = () => {
   }
 
   return (
-    <div className="container mx-auto p-4">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">My Courses</h2>
-        {!isAddingCourse && !editingCourse && (
-          <button 
-            onClick={() => setIsAddingCourse(true)}
-            className="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-md transition-colors duration-200"
-          >
-            Add Course
-          </button>
+    <div className="p-4 md:p-6 bg-gray-50 min-h-screen">
+      <div className="max-w-7xl mx-auto">
+        <div className="flex justify-between items-center mb-8">
+          <h2 className="text-3xl font-bold text-gray-800">My Courses</h2>
+          {!isAddingCourse && !editingCourse && (
+            <button 
+              onClick={() => setIsAddingCourse(true)}
+              className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 shadow-sm"
+            >
+              <FaPlus className="mr-2" />
+              Add Course
+            </button>
+          )}
+        </div>
+
+        {(isAddingCourse || editingCourse) && (
+          <div className="bg-white p-6 rounded-xl shadow-lg mb-8">
+            <CourseForm 
+              onSuccess={handleAddOrUpdateCourse} 
+              onCancel={() => {
+                setIsAddingCourse(false);
+                setEditingCourse(null);
+              }}
+              course={editingCourse}
+            />
+          </div>
+        )}
+
+        {courses.length === 0 && !isAddingCourse && !editingCourse ? (
+          <div className="text-center py-20 border-2 border-dashed border-gray-300 rounded-lg bg-white">
+            <FaBook className="mx-auto h-12 w-12 text-gray-400" />
+            <h3 className="mt-4 text-lg font-medium text-gray-900">No courses yet!</h3>
+            <p className="mt-2 text-sm text-gray-500">
+              Click the "Add Course" button to create your first course.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            {courses.map((course) => (
+              <div key={course.id} className="bg-white rounded-xl shadow-lg flex flex-col justify-between transform hover:-translate-y-1 transition-all duration-300">
+                <div className="p-6">
+                  <h3 className="text-xl font-bold text-gray-800 mb-2 truncate">{course.name}</h3>
+                  <p className="text-gray-600 text-sm h-16 overflow-hidden">{course.description || 'No description provided.'}</p>
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <div className="flex items-center text-sm text-gray-500">
+                      <FaUsers className="mr-2 text-indigo-500" />
+                      <span>{course.enrolled_students_count} Enrolled Students</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="bg-gray-50 p-3 rounded-b-xl grid grid-cols-2 gap-2">
+                  <button 
+                      onClick={() => handleViewSessions(course.id)} 
+                      className="w-full inline-flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                  >
+                      <FaClipboardList className="mr-2"/>
+                      Sessions
+                  </button>
+                  <button 
+                      onClick={() => setEditingCourse(course)} 
+                      className="w-full inline-flex items-center justify-center px-3 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+                  >
+                      <FaEdit className="mr-2"/>
+                      Edit
+                  </button>
+                  <button 
+                      onClick={() => handleDeleteCourse(course.id)} 
+                      className="col-span-2 w-full inline-flex items-center justify-center mt-2 px-3 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                  >
+                      <FaTrash className="mr-2"/>
+                      Delete Course
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
-
-      {(isAddingCourse || editingCourse) && (
-        <CourseForm 
-          onSuccess={handleAddOrUpdateCourse} 
-          onCancel={() => {
-            setIsAddingCourse(false);
-            setEditingCourse(null);
-          }}
-          course={editingCourse}
-          // Lecturers should only be able to assign themselves, so we don't pass the lecturers prop
-        />
-      )}
-
-      {courses.length === 0 && !isAddingCourse && !editingCourse ? (
-        <div className="text-center p-8 border rounded-lg bg-gray-50 mt-6">
-          <p className="text-gray-600">You are not assigned to any courses. Click "Add Course" to create one.</p>
-        </div>
-      ) : (
-        <div className="shadow-md rounded-lg overflow-x-auto mt-6">
-          <table className="min-w-full bg-white">
-            <thead className="bg-gray-800 text-white">
-              <tr>
-                <th className="text-left py-3 px-4 uppercase font-semibold text-sm">Course Name</th>
-                <th className="text-left py-3 px-4 uppercase font-semibold text-sm">Description</th>
-                <th className="text-center py-3 px-4 uppercase font-semibold text-sm">Enrolled Students</th>
-                <th className="text-center py-3 px-4 uppercase font-semibold text-sm">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="text-gray-700">
-              {courses.map((course) => (
-                <tr key={course.id} className="border-b border-gray-200 hover:bg-gray-100">
-                  <td className="text-left py-3 px-4">{course.name}</td>
-                  <td className="text-left py-3 px-4">{course.description || '-'}</td>
-                  <td className="text-center py-3 px-4">{course.enrolled_students_count}</td>
-                  <td className="text-center py-3 px-4 space-x-2">
-                    <button 
-                        onClick={() => handleManageStudents(course.id)} 
-                        className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-3 rounded-md text-sm transition-colors duration-200"
-                    >
-                        Manage Students
-                    </button>
-                    <button 
-                        onClick={() => handleViewSessions(course.id)} 
-                        className="bg-green-500 hover:bg-green-600 text-white font-bold py-1 px-3 rounded-md text-sm transition-colors duration-200"
-                    >
-                        View Sessions
-                    </button>
-                    <button 
-                        onClick={() => setEditingCourse(course)} 
-                        className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-1 px-3 rounded-md text-sm transition-colors duration-200"
-                    >
-                        Edit
-                    </button>
-                    <button 
-                        onClick={() => handleDeleteCourse(course.id)} 
-                        className="bg-red-500 hover:bg-red-600 text-white font-bold py-1 px-3 rounded-md text-sm transition-colors duration-200"
-                    >
-                        Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 };

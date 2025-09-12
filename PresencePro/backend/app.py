@@ -1237,8 +1237,8 @@ def get_enrolled_students(course_id):
 @jwt_required()
 def handle_course_sessions(course_id):
     """
-    Handles GET requests to retrieve all sessions for a course and
-    POST requests to create a new session for a course.
+    Handles GET requests to retrieve all sessions for a course (with attendance rates)
+    and POST requests to create a new session.
     """
     current_user_identity = get_jwt_identity()
     current_user = db.session.query(User).filter_by(username=current_user_identity).first()
@@ -1266,6 +1266,7 @@ def handle_course_sessions(course_id):
         session_date_str = data.get('session_date')
         start_time_str = data.get('start_time')
         end_time_str = data.get('end_time')
+        topic = data.get('topic', 'No Topic Provided').strip()
 
         if not session_date_str or not start_time_str or not end_time_str:
             return jsonify({"message": "session_date, start_time, and end_time are required"}), 400
@@ -1282,14 +1283,28 @@ def handle_course_sessions(course_id):
                 course_id=course_id,
                 session_date=session_date,
                 start_time=start_time,
-                end_time=end_time
+                end_time=end_time,
+                topic=topic
             )
             db.session.add(new_session)
             db.session.commit()
             logger.info(f"Session {new_session.id} created for course {course_id} by {current_user.username}")
+            
+            # *** FIX: Return the full session object ***
+            session_data = {
+                'id': new_session.id,
+                'course_id': new_session.course_id,
+                'session_date': str(new_session.session_date),
+                'start_time': new_session.start_time.strftime('%H:%M'),
+                'end_time': new_session.end_time.strftime('%H:%M'),
+                'is_active': new_session.is_active,
+                'topic': new_session.topic,
+                'attendanceRate': 0  # A new session has 0% attendance
+            }
+            
             return jsonify({
                 "message": "Session created successfully",
-                "session_id": new_session.id,
+                "session": session_data,
             }), 201
         except Exception as e:
             db.session.rollback()
@@ -1299,17 +1314,59 @@ def handle_course_sessions(course_id):
     # --- HANDLE GET REQUEST (LIST SESSIONS) ---
     if request.method == 'GET':
         sessions = db.session.query(Session).filter_by(course_id=course_id).order_by(Session.session_date.desc(), Session.start_time.desc()).all()
-        sessions_data = [
-            {
+        enrolled_count = db.session.query(Student).join(Student.courses).filter(Course.id == course_id).count()
+        
+        sessions_data = []
+        for session in sessions:
+            attendance_count = db.session.query(Attendance).filter_by(session_id=session.id).count()
+            attendance_rate = (attendance_count / enrolled_count) * 100 if enrolled_count > 0 else 0
+            
+            sessions_data.append({
                 'id': session.id,
                 'course_id': session.course_id,
                 'session_date': str(session.session_date),
-                'start_time': str(session.start_time),
-                'end_time': str(session.end_time),
-                'is_active': session.is_active
-            } for session in sessions
-        ]
+                'start_time': session.start_time.strftime('%H:%M'),
+                'end_time': session.end_time.strftime('%H:%M'),
+                'is_active': session.is_active,
+                'topic': session.topic,
+                'attendanceRate': round(attendance_rate)
+            })
         return jsonify({"sessions": sessions_data}), 200
+
+@app.route('/api/courses/<int:course_id>/sessions/<int:session_id>', methods=['GET'])
+@role_required(['lecturer', 'admin', 'student'])
+def get_session_details(current_user, course_id, session_id):
+    """Fetches details for a single session within a course."""
+    session = db.session.query(Session).filter_by(id=session_id, course_id=course_id).first()
+    
+    if not session:
+        return jsonify({"message": "Session not found within this course"}), 404
+
+    # Authorization: Ensure the user is an admin, the course lecturer, or an enrolled student.
+    course = session.course
+    is_authorized = current_user.is_admin or \
+                    (current_user.role == 'lecturer' and course.lecturer_id == current_user.id)
+    
+    if not is_authorized and current_user.role == 'student':
+        student_profile = db.session.query(Student).filter_by(user_id=current_user.id).first()
+        if student_profile and student_profile in course.students:
+            is_authorized = True
+
+    if not is_authorized:
+        return jsonify({"message": "Unauthorized to view this session's details"}), 403
+
+    # The frontend expects a 'session' object.
+    session_data = {
+        'id': session.id,
+        'course_id': session.course_id,
+        'session_date': str(session.session_date),
+        'start_time': str(session.start_time.strftime('%H:%M')),
+        'end_time': str(session.end_time.strftime('%H:%M')),
+        'topic': session.topic,
+        'is_active': session.is_active,
+    }
+
+    return jsonify({"session": session_data}), 200
 
 # --- Attendance Routes ---
 # Removed `/attendance/<int:attendance_id>` as it's not present in the code.
@@ -1729,7 +1786,7 @@ def import_students(current_user):
 @app.route('/api/sessions/<int:session_id>', methods=['PUT'])
 @role_required(['lecturer', 'admin'])
 def update_session(current_user, session_id):
-    """Allows a lecturer or admin to update a session's details."""
+    """Allows a lecturer or admin to update a session's details, including topic."""
     session_to_update = db.session.query(Session).get(session_id)
     if not session_to_update:
         return jsonify({"message": "Session not found"}), 404
@@ -1749,6 +1806,8 @@ def update_session(current_user, session_id):
             session_to_update.start_time = datetime.strptime(data['start_time'], '%H:%M').time()
         if 'end_time' in data:
             session_to_update.end_time = datetime.strptime(data['end_time'], '%H:%M').time()
+        if 'topic' in data:
+            session_to_update.topic = data['topic'].strip()
         
         db.session.commit()
         logger.info(f"Session {session_id} updated by {current_user.username}")
@@ -1814,3 +1873,157 @@ def get_session_attendance_list(current_user, session_id):
         })
 
     return jsonify(attendance_data), 200
+
+    # --- New Endpoints for Enhanced Session Management ---
+
+@app.route('/api/sessions/<int:session_id>/duplicate', methods=['POST'])
+@role_required(['lecturer', 'admin'])
+def duplicate_session(current_user, session_id):
+    """Duplicates an existing session, setting its date for one week in the future."""
+    session_to_duplicate = db.session.query(Session).get(session_id)
+    if not session_to_duplicate:
+        return jsonify({"message": "Session to duplicate not found"}), 404
+
+    # Authorization check
+    if not current_user.is_admin and session_to_duplicate.course.lecturer_id != current_user.id:
+        return jsonify({"message": "Unauthorized to duplicate this session"}), 403
+
+    try:
+        # Calculate the date for the new session, one week from the original
+        new_date = session_to_duplicate.session_date + timedelta(days=7)
+
+        # Create the new session
+        duplicated_session = Session(
+            course_id=session_to_duplicate.course_id,
+            session_date=new_date,
+            start_time=session_to_duplicate.start_time,
+            end_time=session_to_duplicate.end_time,
+            topic=session_to_duplicate.topic,
+            is_active=False # Duplicated sessions are not active by default
+        )
+        db.session.add(duplicated_session)
+        db.session.commit()
+        logger.info(f"Session {session_id} duplicated to new session {duplicated_session.id} by {current_user.username}")
+        
+        return jsonify({
+            "message": "Session duplicated successfully",
+            "new_session": {
+                'id': duplicated_session.id,
+                'course_id': duplicated_session.course_id,
+                'session_date': str(duplicated_session.session_date),
+                'start_time': str(duplicated_session.start_time),
+                'end_time': str(duplicated_session.end_time),
+                'topic': duplicated_session.topic,
+                'is_active': False,
+                'attendanceRate': 0
+            }
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error duplicating session {session_id}: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while duplicating the session"}), 500
+
+
+@app.route('/api/courses/<int:course_id>/sessions/impromptu', methods=['POST'])
+@role_required(['lecturer', 'admin'])
+def create_impromptu_session(current_user, course_id):
+    """Creates and activates a new 15-minute session for the given course."""
+    course = db.session.query(Course).get(course_id)
+    if not course:
+        return jsonify({"message": "Course not found"}), 404
+
+    # Authorization check
+    if not current_user.is_admin and course.lecturer_id != current_user.id:
+        return jsonify({"message": "Unauthorized to create a session for this course"}), 403
+    
+    # Prevent creating a new active session if one already exists for this course
+    if db.session.query(Session).filter_by(course_id=course_id, is_active=True).first():
+        return jsonify({"message": "An active session for this course is already running"}), 409
+
+    try:
+        now = datetime.now(timezone.utc)
+        fifteen_minutes_later = now + timedelta(minutes=15)
+
+        impromptu_session = Session(
+            course_id=course_id,
+            session_date=now.date(),
+            start_time=now.time(),
+            end_time=fifteen_minutes_later.time(),
+            topic="Impromptu Session",
+            is_active=True,
+            expires_at=fifteen_minutes_later,
+            qr_code_uuid=str(uuid4())
+        )
+
+        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+        full_scan_url = f"{frontend_url}/student/scan-qr?session_id={impromptu_session.id}&uuid={impromptu_session.qr_code_uuid}"
+        impromptu_session.qr_code_data = generate_qr_code_data(full_scan_url)
+
+        db.session.add(impromptu_session)
+        db.session.commit()
+        
+        logger.info(f"Impromptu session {impromptu_session.id} created for course {course_id} by {current_user.username}")
+
+        return jsonify({
+            "message": "Impromptu session started successfully",
+            "session": {
+                'id': impromptu_session.id,
+                'course_id': impromptu_session.course_id,
+                'session_date': str(impromptu_session.session_date),
+                'start_time': str(impromptu_session.start_time),
+                'end_time': str(impromptu_session.end_time),
+                'topic': impromptu_session.topic,
+                'is_active': True,
+                'attendanceRate': 0,
+                'qr_code_data': impromptu_session.qr_code_data,
+                'expires_at': impromptu_session.expires_at.isoformat()
+            }
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error creating impromptu session for course {course_id}: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while creating the impromptu session"}), 500
+
+
+@app.route('/api/courses/<int:course_id>/summary', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_course_summary(current_user, course_id):
+    """Provides key statistics for a specific course dashboard."""
+    course = db.session.query(Course).get(course_id)
+    if not course:
+        return jsonify({"message": "Course not found"}), 404
+        
+    # Authorization check
+    if not current_user.is_admin and course.lecturer_id != current_user.id:
+        return jsonify({"message": "Unauthorized to view this course summary"}), 403
+
+    try:
+        total_sessions = db.session.query(Session).filter_by(course_id=course.id).count()
+        student_count = db.session.query(Student).join(Student.courses).filter(Course.id == course.id).count()
+        
+        total_attendance = 0
+        total_possible_attendance = 0
+        
+        sessions_in_course = db.session.query(Session).filter_by(course_id=course.id).all()
+
+        if student_count > 0:
+            for session in sessions_in_course:
+                attendance_count = db.session.query(Attendance).filter_by(session_id=session.id).count()
+                total_attendance += attendance_count
+                total_possible_attendance += student_count
+
+        average_attendance_rate = (total_attendance / total_possible_attendance) * 100 if total_possible_attendance > 0 else 0
+
+        summary = {
+            "averageAttendance": round(average_attendance_rate),
+            "totalSessions": total_sessions,
+            "studentCount": student_count
+        }
+        return jsonify(summary), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching course summary for {course.name}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching course summary"}), 500
+
