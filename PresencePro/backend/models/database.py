@@ -1,5 +1,5 @@
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import Column, Integer, String, ForeignKey, Date, DateTime, Table, Time, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, Date, DateTime, Table, Time, Boolean, JSON
 from sqlalchemy.orm import relationship
 import os
 from datetime import datetime
@@ -93,3 +93,13 @@ class Attendance(db.Model):
 class TokenDenylist(db.Model):
     id = Column(Integer, primary_key=True)
     jti = Column(String(36), unique=True, nullable=False)
+
+class SystemLog(db.Model):
+    __tablename__ = 'system_logs'
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    level = Column(String(50), nullable=False)
+    user = Column(String(80), nullable=True)
+    action = Column(String(255), nullable=False)
+    description = Column(String(1024), nullable=True)
+    details = Column(JSON, nullable=True)

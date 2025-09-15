@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
@@ -7,6 +8,9 @@ import LoginPage from './components/Login';
 import Homepage from './components/Homepage';
 import Navbar from './components/Navbar';
 import AdminPortal from './components/AdminPortal';
+import ContactForm from './components/ContactForm'; // Import the ContactForm
+
+// ... [rest of the imports] ...
 
 // Layouts & Menus
 import StudentDashboard from './components/student/StudentDashboard';
@@ -18,16 +22,18 @@ import ManageUsers from './components/admin/ManageUsers';
 import ManageCourses from './components/admin/ManageCourses';
 import ManageSessions from './components/admin/ManageSessions';
 import AttendanceReports from './components/admin/AttendanceReports';
+import SystemLogs from './components/admin/SystemLogs';
 
 // Lecturer Components
 import LecturerDashboard from './components/lecturer/LecturerDashboard';
 import ManageCoursesLecturer from './components/lecturer/ManageCoursesLecturer';
 import ManageSessionsLecturer from './components/lecturer/ManageSessionsLecturer';
-import ViewAttendanceLecturer from './components/lecturer/ViewAttendanceLecturer';
 import ManageCourseStudents from './components/lecturer/ManageCourseStudents';
 import ViewSessions from './components/lecturer/ViewSessions';
 import SessionDetails from './components/lecturer/SessionDetails';
-import CourseAttendanceSummary from './components/lecturer/CourseAttendanceSummary'; // CORRECTED IMPORT
+import LecturerProfile from './components/lecturer/LecturerProfile';
+import StudentDirectory from './pages/lecturer/StudentDirectory';
+import Reports from './pages/lecturer/Reports';
 
 // Student Components
 import ScanQrCode from './components/student/ScanQrCode';
@@ -51,6 +57,7 @@ function App() {
       <Routes>
         <Route path="/" element={<Homepage />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/contact" element={<ContactForm />} /> {/* Add the contact route */}
 
         {/* Admin Routes */}
         <Route 
@@ -62,6 +69,7 @@ function App() {
           <Route path="courses" element={<ManageCourses />} />
           <Route path="sessions" element={<ManageSessions />} />
           <Route path="reports" element={<AttendanceReports />} />
+          <Route path="system-logs" element={<SystemLogs />} />
         </Route>
 
         {/* --- UPDATED LECTURER ROUTES --- */}
@@ -72,18 +80,13 @@ function App() {
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<LecturerDashboard />} />
           <Route path="courses" element={<ManageCoursesLecturer />} />
+          <Route path="student-directory" element={<StudentDirectory />} />
           <Route path="courses/:courseId/students" element={<ManageCourseStudents />} />
-          
           <Route path="courses/:courseId/sessions" element={<ViewSessions />} />
           <Route path="courses/:courseId/sessions/:sessionId" element={<SessionDetails />} />
-          
-          {/* This is the new, correct route for the detailed summary page */}
-          <Route path="courses/:courseId/attendance" element={<CourseAttendanceSummary />} />
-
           <Route path="sessions" element={<ManageSessionsLecturer />} />
-          
-          {/* This is the route for the main attendance dashboard (course selection) */}
-          <Route path="attendance" element={<ViewAttendanceLecturer />} />
+          <Route path="reports" element={<Reports />} />
+          <Route path="profile" element={<LecturerProfile />} />
         </Route>
 
         {/* --- FIX: Public Route for QR Code Scanning --- */}

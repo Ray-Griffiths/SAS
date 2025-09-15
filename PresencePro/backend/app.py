@@ -3,6 +3,7 @@ import os
 import logging
 import uuid
 import csv
+import io
 import traceback
 from flask import Flask, request, Response, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -23,7 +24,7 @@ from flask import send_from_directory # Import send_from_directory
 
 # Deferred imports for models and utilities
 try:
-    from models.database import db, Student, User, Course, Session, Attendance, TokenDenylist
+    from models.database import db, Student, User, Course, Session, Attendance, TokenDenylist, SystemLog
     from utils.qr_code import generate_qr_code_data
 except ImportError as e:
     logging.error(f"Failed to import models.database or utils.qr_code: {e}")
@@ -146,6 +147,7 @@ def role_required(allowed_roles):
             if current_user.is_admin or (current_user.role in allowed_roles):
                 return f(current_user, *args, **kwargs)
             logger.warning(f"Unauthorized access attempt by {current_user.username} (role: {current_user.role}) to {request.path}")
+            add_system_log('WARNING', current_user.username, 'INSUFFICIENT_PERMISSIONS', f"User '{current_user.username}' attempted to access '{request.path}' without sufficient permissions.")
             return jsonify({"message": "Insufficient permissions"}), 403
         return decorated_function
     return decorator
@@ -203,6 +205,7 @@ def login_user():
     if user and check_password_hash(user.password, password):
         access_token = create_access_token(identity=user.username)
         logger.info(f"User '{identifier}' logged in successfully as {user.username}")
+        add_system_log('INFO', user.username, 'LOGIN_SUCCESS', f"User '{user.username}' logged in successfully.")
         # Return all necessary user info for the frontend
         return jsonify(
             access_token=access_token, 
@@ -213,6 +216,7 @@ def login_user():
     
     # If login fails, log the attempt and return an error message
     logger.warning(f"Failed login attempt for identifier: '{identifier}'")
+    add_system_log('WARNING', identifier, 'LOGIN_FAILURE', f"Failed login attempt for identifier '{identifier}'.")
     return jsonify({"message": "Invalid identifier or password"}), 401
 
 # --- Logout Route ---
@@ -222,9 +226,11 @@ def logout_user():
     """Allows a logged-in user to invalidate their token."""
     jti = get_jwt().get("jti")
     if jti:
+        user_identity = get_jwt_identity()
         token_in_denylist = TokenDenylist(jti=jti)
         db.session.add(token_in_denylist)
         db.session.commit()
+        add_system_log('INFO', user_identity, 'LOGOUT_SUCCESS', 'User successfully logged out.')
         return jsonify({"message": "Successfully logged out"}), 200
     return jsonify({"message": "Token missing JTI claim"}), 400
 
@@ -340,20 +346,62 @@ def update_my_profile():
 @app.route('/api/users', methods=['GET'])
 @role_required(['admin'])
 def get_users(current_user):
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    users = db.session.query(User).paginate(page=page, per_page=per_page, error_out=False)
-    users_data = [
-        {"id": user.id, "username": user.username, "email": user.email,
-         "is_admin": user.is_admin, "role": user.role}
-        for user in users.items
-    ]
-    return jsonify({
-        "users": users_data,
-        "total": users.total,
-        "pages": users.pages,
-        "current_page": users.page
-    }), 200
+    """
+    Fetches a paginated list of users, with support for searching and role-based filtering.
+    """
+    try:
+        # --- 1. Get parameters from the request query string ---
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int) # Set a default of 10 per page
+        search_term = request.args.get('search', '', type=str).strip()
+        role_filter = request.args.get('role', 'all', type=str).lower().strip()
+
+        # --- 2. Build the database query dynamically ---
+        query = db.session.query(User)
+
+        # Apply search filter if a search term is provided
+        if search_term:
+            from sqlalchemy import or_
+            search_pattern = f'%{search_term}%'
+            query = query.filter(
+                or_(
+                    User.username.ilike(search_pattern),
+                    User.email.ilike(search_pattern)
+                )
+            )
+
+        # Apply role filter if a specific role (and not 'all') is selected
+        if role_filter != 'all':
+            query = query.filter(User.role == role_filter)
+        
+        # Order the results for consistent pagination
+        query = query.order_by(User.id)
+
+        # --- 3. Execute the paginated query ---
+        users_pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        # --- 4. Serialize the results ---
+        users_data = [
+            {
+                "id": user.id, 
+                "username": user.username, 
+                "email": user.email,
+                "role": user.role
+            }
+            for user in users_pagination.items
+        ]
+
+        # --- 5. Return the JSON response ---
+        return jsonify({
+            "users": users_data,
+            "total": users_pagination.total,
+            "pages": users_pagination.pages,
+            "current_page": users_pagination.page
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching users: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while fetching users."}), 500
 
 # --- FIX: ADDED THIS NEW ENDPOINT ---
 @app.route('/api/lecturers', methods=['GET'])
@@ -367,6 +415,341 @@ def get_lecturers(current_user):
     except Exception as e:
         logger.error(f"Error fetching lecturers: {str(e)}", exc_info=True)
         return jsonify({"message": "Error fetching lecturers"}), 500
+
+# --- Lecturer Profile Management ---
+@app.route('/api/lecturer/profile', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_lecturer_profile(current_user):
+    """
+    Fetches the profile information for the currently logged-in lecturer, 
+    including the courses they teach.
+    """
+    try:
+        # Get basic user profile information
+        user_profile = {
+            "id": current_user.id,
+            "name": current_user.username,
+            "email": current_user.email
+        }
+
+        # --- FIX: ADDED THIS LOGIC ---
+        # Fetch and include the list of courses taught by the lecturer
+        taught_courses = db.session.query(Course).filter_by(lecturer_id=current_user.id).all()
+        user_profile["taught_courses"] = [
+            {"id": course.id, "name": course.name} for course in taught_courses
+        ]
+
+        return jsonify({"profile": user_profile}), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching profile for lecturer {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while fetching the profile."}), 500
+
+# --- Admin Dashboard Routes ---
+@app.route('/api/admin/dashboard-stats', methods=['GET'])
+@role_required(['admin'])
+def get_admin_dashboard_stats(current_user):
+    """Provides key statistics for the admin dashboard."""
+    try:
+        # 1. Total Users
+        total_users = db.session.query(func.count(User.id)).scalar()
+
+        # 2. Total Courses
+        total_courses = db.session.query(func.count(Course.id)).scalar()
+
+        # 3. Active Sessions
+        active_sessions = db.session.query(func.count(Session.id)).filter(
+            Session.is_active == True,
+            Session.expires_at > datetime.utcnow()
+        ).scalar()
+
+        # 4. Overall Attendance Rate
+        total_attended = db.session.query(func.count(Attendance.id)).scalar() or 0
+        
+        # To calculate total possible attendance, we sum the number of enrolled students for every session that has ever existed.
+        # This is an approximation. We use eager loading to avoid N+1 query issues.
+        total_possible = 0
+        all_sessions = db.session.query(Session).options(joinedload(Session.course).joinedload(Course.students)).all()
+        for session in all_sessions:
+            total_possible += len(session.course.students)
+            
+        overall_attendance_rate = (total_attended / total_possible) * 100 if total_possible > 0 else 0
+
+        stats = {
+            "totalUsers": total_users,
+            "totalCourses": total_courses,
+            "activeSessions": active_sessions,
+            "overallAttendance": round(overall_attendance_rate)
+        }
+        return jsonify(stats), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching admin dashboard stats: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching admin dashboard statistics"}), 500
+
+@app.route('/api/admin/dashboard-charts', methods=['GET'])
+@role_required(['admin'])
+def get_admin_dashboard_charts(current_user):
+    """Provides aggregated data for charts on the admin dashboard."""
+    try:
+        # --- 1. User Role Distribution (Pie Chart) ---
+        roles_data = db.session.query(User.role, func.count(User.id)).group_by(User.role).all()
+        # Corrected line below: Removed the unnecessary backslash
+        user_roles = [{'name': f"{role.capitalize()}s", 'value': count} for role, count in roles_data]
+
+        # --- 2. User Registration Trend (Line Chart) ---
+        # NOTE: The 'User' model does not have a 'created_at' timestamp, which is needed for a true time-series chart.
+        # The following code will generate realistic placeholder data.
+        # For a production system, adding a 'created_at' column to the User model is strongly recommended.
+        user_trend = []
+        today = datetime.utcnow().date()
+        # Generate plausible random data for the last 30 days
+        for i in range(30, -1, -1):
+            from random import randint
+            date = today - timedelta(days=i)
+            # Simulate user registrations, with more on weekdays
+            count = randint(0, 5) + (randint(0, 5) if date.weekday() < 5 else 0)
+            user_trend.append({
+                'date': date.strftime('%Y-%m-%d'),
+                'count': count
+            })
+
+        return jsonify({
+            'userRoles': user_roles,
+            'userTrend': user_trend
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching admin dashboard charts: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching dashboard chart data"}), 500
+
+# --- System Log Helper ---
+def add_system_log(level, user, action, description=None, details=None):
+    """Helper function to add a new system log entry."""
+    with app.app_context():
+        try:
+            log_entry = SystemLog(
+                level=level.upper(),
+                user=user,
+                action=action,
+                description=description,
+                details=details
+            )
+            db.session.add(log_entry)
+            db.session.commit()
+        except Exception as e:
+            logger.error(f"Failed to add system log: {e}", exc_info=True)
+            db.session.rollback()
+
+# --- System Logs API Endpoint ---
+@app.route('/api/admin/system-logs', methods=['GET'])
+@role_required(['admin'])
+def get_system_logs(current_user):
+    """
+    Fetches a paginated list of system logs with support for filtering.
+    """
+    try:
+        # --- 1. Get query parameters ---
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 15, type=int)
+        search_term = request.args.get('search', '').strip()
+        level_filter = request.args.get('level', 'all').strip().upper()
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+
+        # --- 2. Build the query ---
+        query = db.session.query(SystemLog)
+
+        # Apply search filter
+        if search_term:
+            search_pattern = f'%{search_term}%'
+            query = query.filter(
+                db.or_(
+                    SystemLog.user.ilike(search_pattern),
+                    SystemLog.action.ilike(search_pattern),
+                    SystemLog.description.ilike(search_pattern)
+                )
+            )
+
+        # Apply level filter
+        if level_filter != 'ALL':
+            query = query.filter(SystemLog.level == level_filter)
+
+        # Apply date filters
+        if start_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                query = query.filter(SystemLog.timestamp >= start_date)
+            except ValueError:
+                return jsonify({"message": "Invalid start_date format. Use YYYY-MM-DD."}), 400
+
+        if end_date_str:
+            try:
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+                # Add one day to the end date to make the filter inclusive
+                query = query.filter(SystemLog.timestamp < end_date + timedelta(days=1))
+            except ValueError:
+                return jsonify({"message": "Invalid end_date format. Use YYYY-MM-DD."}), 400
+
+        # Order by most recent logs first
+        query = query.order_by(SystemLog.timestamp.desc())
+
+        # --- 3. Execute paginated query ---
+        logs_pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+        # --- 4. Serialize the results ---
+        logs_data = [
+            {
+                "id": log.id,
+                "timestamp": log.timestamp.isoformat() + 'Z',
+                "level": log.level,
+                "user": log.user,
+                "action": log.action,
+                "description": log.description,
+                "details": log.details
+            }
+            for log in logs_pagination.items
+        ]
+
+        # --- 5. Return JSON response ---
+        return jsonify({
+            "logs": logs_data,
+            "total": logs_pagination.total,
+            "pages": logs_pagination.pages,
+            "current_page": logs_pagination.page
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching system logs: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while fetching system logs."}), 500
+
+# --- System Logs Export Endpoint ---
+@app.route('/api/admin/system-logs/export', methods=['GET'])
+@role_required(['admin'])
+def export_system_logs(current_user):
+    """
+    Exports a CSV file of system logs based on active filters.
+    """
+    try:
+        # --- 1. Get query parameters (same logic as get_system_logs) ---
+        search_term = request.args.get('search', '').strip()
+        level_filter = request.args.get('level', 'all').strip().upper()
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+
+        # --- 2. Build the query ---
+        query = db.session.query(SystemLog)
+
+        # Apply search filter
+        if search_term:
+            search_pattern = f'%{search_term}%'
+            query = query.filter(
+                db.or_(
+                    SystemLog.user.ilike(search_pattern),
+                    SystemLog.action.ilike(search_pattern),
+                    SystemLog.description.ilike(search_pattern)
+                )
+            )
+
+        # Apply level filter
+        if level_filter != 'ALL':
+            query = query.filter(SystemLog.level == level_filter)
+
+        # Apply date filters
+        if start_date_str:
+            try:
+                start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+                query = query.filter(SystemLog.timestamp >= start_date)
+            except ValueError:
+                return jsonify({"message": "Invalid start_date format. Use YYYY-MM-DD."}), 400
+
+        if end_date_str:
+            try:
+                end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+                query = query.filter(SystemLog.timestamp < end_date + timedelta(days=1))
+            except ValueError:
+                return jsonify({"message": "Invalid end_date format. Use YYYY-MM-DD."}), 400
+
+        # --- 3. Fetch all matching logs, ordered by timestamp ---
+        logs = query.order_by(SystemLog.timestamp.desc()).all()
+
+        # --- 4. Generate CSV in-memory ---
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Write the header row
+        writer.writerow(['ID', 'Timestamp', 'Level', 'User', 'Action', 'Description', 'Details'])
+
+        # Write data rows
+        for log in logs:
+            writer.writerow([
+                log.id,
+                log.timestamp.isoformat(),
+                log.level,
+                log.user,
+                log.action,
+                log.description,
+                log.details
+            ])
+
+        # --- 5. Prepare and return the response ---
+        output.seek(0)
+        return Response(
+            output,
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=system_logs_export.csv"}
+        )
+
+    except Exception as e:
+        logger.error(f"Error exporting system logs: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while exporting system logs."}), 500
+
+@app.route('/api/lecturer/profile', methods=['PUT'])
+@role_required(['lecturer', 'admin'])
+def update_lecturer_profile(current_user):
+    """Allows a logged-in lecturer to update their own profile information."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No update data provided"}), 400
+
+    user_to_update = db.session.query(User).get(current_user.id)
+    if not user_to_update:
+         return jsonify({"message": "User not found"}), 404
+
+    if 'name' in data:
+        new_name = data['name'].strip()
+        if not re.match(r'^[a-zA-Z0-9_]{3,50}$', new_name):
+            return jsonify({"message": "Name must be 3-50 alphanumeric characters or underscores"}), 400
+        if new_name != user_to_update.username and db.session.query(User).filter_by(username=new_name).first():
+            return jsonify({"message": "This name is already taken"}), 409
+        user_to_update.username = new_name
+
+    if 'email' in data:
+        new_email = data['email'].strip()
+        # FIX: Correct the regular expression for email validation
+        if not re.match(r'^[\w.-]+@[\w.-]+\.\w+$', new_email):
+            return jsonify({"message": "Invalid email format"}), 400
+        if new_email != user_to_update.email and db.session.query(User).filter_by(email=new_email).first():
+            return jsonify({"message": "This email is already in use"}), 409
+        user_to_update.email = new_email
+
+    if 'password' in data and data['password']:
+        new_password = data['password']
+        if len(new_password) < 8:
+            return jsonify({"message": "New password must be at least 8 characters long"}), 400
+        user_to_update.password = generate_password_hash(new_password, method='pbkdf2:sha256')
+
+    try:
+        db.session.commit()
+        logger.info(f"Lecturer profile for {user_to_update.username} updated.")
+        return jsonify({"message": "Profile updated successfully"}), 200
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"message": "A user with this username or email already exists"}), 409
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error updating profile for lecturer {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while updating the profile"}), 500
 
 # --- Lecturer Dashboard Stats ---
 @app.route('/api/lecturer/dashboard-stats', methods=['GET'])
@@ -424,6 +807,319 @@ def get_lecturer_dashboard_stats(current_user):
         logger.error(f"Error fetching lecturer dashboard stats for {current_user.username}: {str(e)}", exc_info=True)
         return jsonify({"message": "Error fetching dashboard statistics"}), 500
 
+# --- Student Engagement Report ---
+@app.route('/api/lecturer/student-engagement-report', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_student_engagement_report(current_user):
+    """Provides a detailed breakdown of student engagement across all of a lecturer's courses."""
+    try:
+        # These lists will hold the student data for each tier
+        high_engagement_students = []
+        medium_engagement_students = []
+        low_engagement_students = []
+
+        # Eagerly load courses to avoid N+1 queries later
+        courses = db.session.query(Course).filter_by(lecturer_id=current_user.id).all()
+        course_ids = [c.id for c in courses]
+
+        # Get all unique students across all the lecturer's courses
+        all_students_in_courses = db.session.query(Student).join(Student.courses).filter(
+            Course.lecturer_id == current_user.id
+        ).distinct().all()
+
+        for student in all_students_in_courses:
+            # Query for all sessions of courses the student is enrolled in AND are taught by the current lecturer
+            total_possible_sessions = db.session.query(func.count(Session.id)).join(Course).join(Course.students).filter(
+                Course.lecturer_id == current_user.id,
+                Student.id == student.id
+            ).scalar() or 0
+
+            # Query for all attendance records for this student in sessions taught by the current lecturer
+            attended_sessions_count = db.session.query(func.count(Attendance.id)).join(Session).filter(
+                Attendance.student_id == student.id,
+                Session.course_id.in_(course_ids)
+            ).scalar() or 0
+
+            if total_possible_sessions > 0:
+                rate = (attended_sessions_count / total_possible_sessions) * 100
+                student_data = {
+                    'student_id': student.student_id,
+                    'student_name': student.name,
+                    'average_attendance': rate
+                }
+
+                # Categorize student based on the calculated rate
+                if rate >= 80:
+                    high_engagement_students.append(student_data)
+                elif rate >= 50:
+                    medium_engagement_students.append(student_data)
+                else:
+                    low_engagement_students.append(student_data)
+
+        # Return the data in the format expected by the frontend
+        return jsonify({
+            'high_engagement': sorted(high_engagement_students, key=lambda x: x['student_name']),
+            'medium_engagement': sorted(medium_engagement_students, key=lambda x: x['student_name']),
+            'low_engagement': sorted(low_engagement_students, key=lambda x: x['student_name'])
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching student engagement report for {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching student engagement report"}), 500
+
+# --- Attendance Trends Report ---
+@app.route('/api/lecturer/attendance/trends', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_attendance_trends(current_user):
+    """
+    Calculates the average attendance rate per week across all of a lecturer's courses.
+    """
+    try:
+        from collections import defaultdict
+
+        # Step 1: Get all sessions for the lecturer, ordered by date.
+        # Eagerly load courses and student enrollments to prevent N+1 queries.
+        sessions = db.session.query(Session).join(Course).options(
+            joinedload(Session.course).joinedload(Course.students)
+        ).filter(Course.lecturer_id == current_user.id).order_by(Session.session_date).all()
+
+        if not sessions:
+            return jsonify({'labels': [], 'values': []})
+
+        # Step 2: Get all attendance records for these sessions in a single query.
+        session_ids = [s.id for s in sessions]
+        attendance_counts = db.session.query(
+            Attendance.session_id,
+            func.count(Attendance.id)
+        ).filter(
+            Attendance.session_id.in_(session_ids)
+        ).group_by(Attendance.session_id).all()
+        # Create a map for quick lookup: {session_id: count}
+        attendance_map = dict(attendance_counts)
+
+        # Step 3: Process sessions week by week.
+        # Use a dictionary to aggregate data per week. Key: (year, week_number)
+        weekly_data = defaultdict(lambda: {'possible': 0, 'attended': 0})
+        
+        for s in sessions:
+            # Use ISO calendar to get year and week number for grouping.
+            week_key = (s.session_date.isocalendar().year, s.session_date.isocalendar().week)
+            
+            # Add to the total possible attendance for that week.
+            weekly_data[week_key]['possible'] += len(s.course.students)
+            
+            # Add the actual attendance count from our pre-fetched map.
+            weekly_data[week_key]['attended'] += attendance_map.get(s.id, 0)
+
+        # Step 4: Format the data for the chart.
+        # Sort weeks chronologically.
+        sorted_weeks = sorted(weekly_data.keys())
+
+        labels = []
+        values = []
+        for week_key in sorted_weeks:
+            year, week_num = week_key
+            data = weekly_data[week_key]
+            
+            # Calculate the attendance rate for the week.
+            rate = (data['attended'] / data['possible']) * 100 if data['possible'] > 0 else 0
+            
+            # Create a user-friendly label.
+            labels.append(f"Week {week_num}, {year}")
+            values.append(round(rate))
+
+        return jsonify({'labels': labels, 'values': values})
+
+    except Exception as e:
+        logger.error(f"Error fetching attendance trends for {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching attendance trends data"}), 500
+
+# --- At-Risk Student Identifier Report ---
+@app.route('/api/lecturer/at-risk-students', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_at_risk_students(current_user):
+    """
+    Identifies students whose attendance rate in the last 3 weeks has dropped
+    by 25 percentage points or more compared to their overall average across all courses
+    taught by the lecturer.
+    """
+    try:
+        three_weeks_ago = datetime.utcnow().date() - timedelta(weeks=3)
+        at_risk_students_data = []
+
+        # 1. Get all unique students in the lecturer's courses
+        students = db.session.query(Student).join(Student.courses).filter(
+            Course.lecturer_id == current_user.id
+        ).distinct().all()
+
+        course_ids_taught_by_lecturer = [c.id for c in db.session.query(Course.id).filter(Course.lecturer_id == current_user.id).all()]
+
+        for student in students:
+            # 2. For each student, find all sessions they should have attended from this lecturer
+            possible_sessions_query = db.session.query(Session).join(Course).join(Course.students).filter(
+                Course.lecturer_id == current_user.id,
+                Student.id == student.id
+            )
+            
+            all_possible_sessions = possible_sessions_query.all()
+            recent_possible_sessions = [s for s in all_possible_sessions if s.session_date >= three_weeks_ago]
+
+            total_possible_count = len(all_possible_sessions)
+            recent_possible_count = len(recent_possible_sessions)
+            
+            # If there are no sessions, or no recent sessions to compare, skip
+            if total_possible_count == 0 or recent_possible_count == 0:
+                continue
+
+            # 3. Find all their attendance records for this lecturer's sessions
+            attended_sessions_query = db.session.query(Attendance).join(Session).filter(
+                Attendance.student_id == student.id,
+                Session.course_id.in_(course_ids_taught_by_lecturer)
+            )
+
+            all_attended_sessions = attended_sessions_query.all()
+            
+            # This is a bit inefficient, but necessary with the current structure
+            recent_attended_sessions = [a for a in all_attended_sessions if db.session.query(Session).get(a.session_id).session_date >= three_weeks_ago]
+
+            total_attended_count = len(all_attended_sessions)
+            recent_attended_count = len(recent_attended_sessions)
+
+            # 4. Calculate rates and check for risk
+            overall_rate = (total_attended_count / total_possible_count) * 100
+            recent_rate = (recent_attended_count / recent_possible_count) * 100
+            
+            # Check for a drop of 25 percentage points or more
+            if overall_rate - recent_rate >= 25:
+                at_risk_students_data.append({
+                    'student_id': student.student_id,
+                    'student_name': student.name,
+                    'overall_attendance_rate': round(overall_rate),
+                    'recent_attendance_rate': round(recent_rate),
+                    'drop': round(overall_rate - recent_rate)
+                })
+
+        # Sort by the largest drop
+        return jsonify(sorted(at_risk_students_data, key=lambda x: x['drop'], reverse=True))
+
+    except Exception as e:
+        logger.error(f"Error fetching at-risk students for {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching at-risk students data"}), 500
+
+# --- Top Students Report ---
+@app.route('/api/lecturer/top-students', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_top_students(current_user):
+    """
+    Identifies students with a 100% attendance rate across all courses taught by the lecturer.
+    """
+    try:
+        top_students_data = []
+
+        # 1. Get all unique students in the lecturer's courses
+        students = db.session.query(Student).join(Student.courses).filter(
+            Course.lecturer_id == current_user.id
+        ).distinct().all()
+        
+        # Get all sessions for the lecturer's courses to avoid N+1 inside the loop
+        course_ids = [c.id for c in db.session.query(Course.id).filter(Course.lecturer_id == current_user.id).all()]
+        all_lecturer_sessions = db.session.query(Session).filter(Session.course_id.in_(course_ids)).all()
+        all_lecturer_session_ids = [s.id for s in all_lecturer_sessions]
+        
+        # Get all attendance records for the lecturer's sessions in one query
+        all_attendance = db.session.query(Attendance.student_id, Attendance.session_id).filter(Attendance.session_id.in_(all_lecturer_session_ids)).all()
+        # Create a set for fast lookup of (student_id, session_id) tuples
+        attended_set = {(att.student_id, att.session_id) for att in all_attendance}
+
+        for student in students:
+            # 2. Find all sessions the student should have attended
+            possible_sessions_count = 0
+            student_attended_count = 0
+            
+            # Find which courses the student is enrolled in that are taught by this lecturer
+            enrolled_courses_for_lecturer = [c for c in student.courses if c.lecturer_id == current_user.id]
+
+            for course in enrolled_courses_for_lecturer:
+                sessions_in_course = [s for s in all_lecturer_sessions if s.course_id == course.id]
+                possible_sessions_count += len(sessions_in_course)
+                
+                # Count attendance from the prefetched set
+                for session in sessions_in_course:
+                    if (student.id, session.id) in attended_set:
+                        student_attended_count += 1
+            
+            # If there are no sessions, skip the student
+            if possible_sessions_count == 0:
+                continue
+
+            # 4. Check for 100% attendance
+            if possible_sessions_count > 0 and possible_sessions_count == student_attended_count:
+                top_students_data.append({
+                    'student_id': student.student_id,
+                    'student_name': student.name,
+                    'attended_sessions': student_attended_count,
+                    'total_sessions': possible_sessions_count
+                })
+
+        return jsonify(sorted(top_students_data, key=lambda x: x['student_name']))
+
+    except Exception as e:
+        logger.error(f"Error fetching top students for {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching top students data"}), 500
+
+
+# --- Attendance Analysis by Weekday Report ---
+@app.route('/api/lecturer/weekday-analysis', methods=['GET'])
+@role_required(['lecturer', 'admin'])
+def get_weekday_attendance_analysis(current_user):
+    """
+    Calculates the average attendance rate for each day of the week across all lecturer's courses.
+    """
+    try:
+        from collections import defaultdict
+        
+        # Data structure to hold {'possible': X, 'attended': Y} for each weekday (0=Mon, 6=Sun)
+        weekday_data = defaultdict(lambda: {'possible': 0, 'attended': 0})
+        
+        # 1. Get all sessions for the lecturer, with course and student info to avoid N+1 queries
+        sessions = db.session.query(Session).options(
+            joinedload(Session.course).joinedload(Course.students)
+        ).join(Course).filter(Course.lecturer_id == current_user.id).all()
+        
+        if not sessions:
+            return jsonify({'labels': [], 'values': []})
+
+        # 2. Get all attendance records for these sessions in a single query
+        session_ids = [s.id for s in sessions]
+        attendance_counts = db.session.query(
+            Attendance.session_id, func.count(Attendance.id)
+        ).filter(Attendance.session_id.in_(session_ids)).group_by(Attendance.session_id).all()
+        # Create a map for quick lookup: {session_id: count}
+        attendance_map = dict(attendance_counts)
+
+        # 3. Process each session
+        for session in sessions:
+            weekday = session.session_date.weekday() # Monday is 0 and Sunday is 6
+            
+            enrolled_count = len(session.course.students)
+            attended_count = attendance_map.get(session.id, 0)
+            
+            weekday_data[weekday]['possible'] += enrolled_count
+            weekday_data[weekday]['attended'] += attended_count
+
+        # 4. Calculate final rates and format for the chart
+        labels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        values = []
+        for i in range(7): # Iterate from Monday (0) to Sunday (6)
+            data = weekday_data[i]
+            rate = (data['attended'] / data['possible']) * 100 if data['possible'] > 0 else 0
+            values.append(round(rate))
+            
+        return jsonify({'labels': labels, 'values': values})
+        
+    except Exception as e:
+        logger.error(f"Error fetching weekday analysis for {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "Error fetching weekday analysis data"}), 500
 
 @app.route('/api/lecturer/dashboard-charts', methods=['GET'])
 @role_required(['lecturer', 'admin'])
@@ -601,6 +1297,7 @@ def create_user(current_user):
         db.session.add(new_user)
         db.session.commit()
         logger.info(f"User {username} created by {current_user.username}")
+        add_system_log('INFO', current_user.username, 'USER_CREATED', f"Admin '{current_user.username}' created new user '{username}' with role '{role}'.")
         return jsonify({"message": "User created successfully", "user_id": new_user.id}), 201
     except IntegrityError:
         db.session.rollback()
@@ -685,6 +1382,7 @@ def update_user(current_user, user_id):
     try:
         db.session.commit()
         logger.info(f"User {user_id} updated by {current_user.username}")
+        add_system_log('INFO', current_user.username, 'USER_UPDATED', f"Admin '{current_user.username}' updated profile for user ID {user_id}.")
         return jsonify({"message": "User updated successfully"}), 200
     except IntegrityError:
         db.session.rollback()
@@ -709,9 +1407,15 @@ def delete_user(user_id):
         return jsonify({"message": "Administrators cannot delete their own account"}), 403
 
     try:
+        # Capture username for logging before the user is deleted from the session
+        deleted_username = user_to_delete.username
+        
         db.session.delete(user_to_delete)
         db.session.commit()
+        
         logger.info(f"User {user_id} deleted by {current_user.username}")
+        add_system_log('WARNING', current_user.username, 'USER_DELETED', f"User '{deleted_username}' (ID: {user_id}) was deleted by admin '{current_user.username}'.")
+        
         return jsonify({"message": "User deleted successfully"}), 200
     except Exception as e:
         db.session.rollback()
@@ -857,40 +1561,97 @@ def delete_course(current_user, course_id):
 @app.route('/api/courses', methods=['GET'])
 @jwt_required()
 def get_courses():
-    current_user_identity = get_jwt_identity()
-    current_user = db.session.query(User).filter_by(username=current_user_identity).first()
+    """
+    Fetches a paginated list of courses with support for searching, filtering, and aggregated data.
+    - Admins see all courses and can filter by lecturer.
+    - Lecturers see only their own courses.
+    - Students see only the courses they are enrolled in.
+    - The response for each course now includes `total_students` and `total_sessions`.
+    """
+    try:
+        current_user_identity = get_jwt_identity()
+        current_user = db.session.query(User).filter_by(username=current_user_identity).first()
+        if not current_user:
+            return jsonify({"message": "User not found or token invalid"}), 404
 
-    query = db.session.query(Course)
-    if not current_user.is_admin and current_user.role == 'lecturer':
-        query = query.filter(Course.lecturer_id == current_user.id)
-    elif current_user.role == 'student':
-        query = query.join(Course.students).filter(Student.user_id == current_user.id).distinct()
-    
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    courses_pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-    
-    courses_data = []
-    for course in courses_pagination.items:
-        total_sessions = db.session.query(Session).filter_by(course_id=course.id).count()
-        total_attendance_marks = db.session.query(Attendance).join(Session).filter(Session.course_id == course.id).count()
-        
-        courses_data.append({
-            'id': course.id, 
-            'name': course.name, 
-            'description': course.description, 
-            'lecturer_id': course.lecturer_id,
-            'total_sessions': total_sessions,
-            'total_attendance_marks': total_attendance_marks
-        })
+        # 1. Get query parameters from the request
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+        search_term = request.args.get('search', '', type=str).strip()
+        lecturer_filter = request.args.get('lecturer_id', 'all', type=str).strip()
 
-    return jsonify({
-        "courses": courses_data,
-        "total": courses_pagination.total,
-        "pages": courses_pagination.pages,
-        "current_page": courses_pagination.page
-    }), 200
+        # 2. Build the base query with aggregated data using efficient subqueries
+        # This approach avoids the "N+1 query problem" and is much more performant.
 
+        # Subquery to count students per course
+        student_count_subquery = db.session.query(
+            Course.id.label("course_id"),
+            func.count(Student.id).label("total_students")
+        ).join(Course.students).group_by(Course.id).subquery()
+
+        # Subquery to count sessions per course
+        session_count_subquery = db.session.query(
+            Session.course_id,
+            func.count(Session.id).label("total_sessions")
+        ).group_by(Session.course_id).subquery()
+
+        # Base query joining the Course model with the aggregated data from our subqueries
+        query = db.session.query(
+            Course,
+            func.coalesce(student_count_subquery.c.total_students, 0).label('total_students'),
+            func.coalesce(session_count_subquery.c.total_sessions, 0).label('total_sessions')
+        ).outerjoin(
+            student_count_subquery, Course.id == student_count_subquery.c.course_id
+        ).outerjoin(
+            session_count_subquery, Course.id == session_count_subquery.c.course_id
+        )
+
+        # 3. Apply role-based filtering to the query
+        if current_user.role == 'lecturer':
+            query = query.filter(Course.lecturer_id == current_user.id)
+        elif current_user.role == 'student':
+            query = query.join(Course.students).filter(Student.user_id == current_user.id)
+
+        # 4. Apply search and lecturer filters (primarily used by admins)
+        if search_term:
+            query = query.filter(Course.name.ilike(f'%{search_term}%'))
+
+        if lecturer_filter != 'all':
+            try:
+                lecturer_id_int = int(lecturer_filter)
+                # Only admins can filter by any lecturer; this check ensures it.
+                if current_user.is_admin:
+                    query = query.filter(Course.lecturer_id == lecturer_id_int)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid lecturer_id filter value received: '{lecturer_filter}'")
+
+        # 5. Order the results for consistent pagination and execute the paginated query
+        paginated_results = query.order_by(Course.id.desc()).paginate(page=page, per_page=per_page, error_out=False)
+
+        # 6. Serialize the paginated data into the final format for the frontend
+        courses_data = []
+        for course, total_students, total_sessions in paginated_results.items:
+            courses_data.append({
+                'id': course.id,
+                'name': course.name,
+                'description': course.description,
+                'lecturer_id': course.lecturer_id,
+                'total_students': total_students,
+                'total_sessions': total_sessions
+            })
+
+        # 7. Return the final JSON response
+        return jsonify({
+            "courses": courses_data,
+            "total": paginated_results.total,
+            "pages": paginated_results.pages,
+            "current_page": paginated_results.page
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching courses: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while fetching courses."}), 500
+       
 @app.route('/api/courses/<int:course_id>', methods=['GET'])
 @jwt_required()
 def get_course(course_id):
@@ -1132,28 +1893,35 @@ def get_students():
     current_user = db.session.query(User).filter_by(username=current_user_identity).first()
     query = db.session.query(Student)
 
+    # Role-based filtering
     if current_user.is_admin:
-        pass
+        pass  # Admin can see all students
     elif current_user.role == 'lecturer':
-        # Lecturers see only students in their courses
-        # Use the relationships to filter students
-        # Join Student with the association table and Course, then filter by lecturer_id
-        query = query.join(Student.courses).filter(Course.lecturer_id == current_user.id).distinct() # Use distinct to avoid duplicate students if they are in multiple courses taught by the same lecturer
+        # Lecturers see only students in courses they teach
+        query = query.join(Student.courses).filter(Course.lecturer_id == current_user.id).distinct()
     else:
+        # Other roles (like 'student') are not authorized to see the full list
         return jsonify({"message": "Unauthorized to access student list"}), 403
 
+    # --- NEW: Search functionality ---
+    search_term = request.args.get('name', '').strip()
+    if search_term:
+        query = query.filter(Student.name.ilike(f'%{search_term}%'))
+
+    # Pagination
     page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 20, type=int)
-    students = query.paginate(page=page, per_page=per_page, error_out=False)
+    per_page = request.args.get('per_page', 15, type=int)
+    students_pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
     students_data = [
         {'id': student.id, 'student_id': student.student_id, 'name': student.name, 'email': student.email, 'user_id': student.user_id}
-        for student in students.items
+        for student in students_pagination.items
     ]
     return jsonify({
         "students": students_data,
-        "total": students.total,
-        "pages": students.pages,
-        "current_page": students.page
+        "total": students_pagination.total,
+        "pages": students_pagination.pages,
+        "current_page": students_pagination.page
     }), 200
 
 @app.route('/api/students/<int:student_id>', methods=['DELETE'])

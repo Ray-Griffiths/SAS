@@ -1,52 +1,153 @@
-import React from 'react';
 
-// A simple card component for displaying stats
-const StatCard = ({ title, value, icon }) => {
-  return (
-    <div className="bg-white p-6 rounded-lg shadow-md flex items-center">
-      <div className="mr-4">{icon}</div>
-      <div>
-        <h3 className="text-gray-500 text-sm font-medium">{title}</h3>
-        <p className="text-2xl font-bold">{value}</p>
-      </div>
+import React, { useState, useEffect } from 'react';
+import { api } from '../../services/api';
+import { Link } from 'react-router-dom';
+import { 
+    FaUsers, FaBook, FaSignal, FaCheckCircle, FaChartLine, 
+    FaChartPie, FaSpinner, FaExclamationCircle, FaUserShield, 
+    FaChalkboardTeacher, FaUserGraduate 
+} from 'react-icons/fa';
+import { 
+    ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
+    Tooltip, Legend, PieChart, Pie, Cell, LineChart, Line 
+} from 'recharts';
+
+// Modernized StatCard with loading state
+const StatCard = ({ title, value, icon, loading }) => (
+  <div className="bg-white p-6 rounded-xl shadow-lg flex items-center transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+    <div className="bg-indigo-100 p-4 rounded-full mr-4">{icon}</div>
+    <div>
+      <h3 className="text-gray-500 text-sm font-medium uppercase tracking-wider">{title}</h3>
+      {loading ? 
+        <div className="mt-1 h-8 w-20 bg-gray-200 rounded animate-pulse"></div> : 
+        <p className="text-3xl font-bold text-gray-800">{value}</p>
+      }
     </div>
-  );
-};
+  </div>
+);
+
+// Chart Container for consistency
+const ChartContainer = ({ title, icon, children, loading, error, hasData }) => (
+    <div className="bg-white p-6 rounded-xl shadow-lg h-96 flex flex-col">
+        <div className="flex items-center mb-4">
+            {icon}
+            <h3 className="text-lg font-bold text-gray-800 ml-2">{title}</h3>
+        </div>
+        <div className="flex-grow flex items-center justify-center">
+            {loading ? <FaSpinner className="animate-spin text-3xl text-indigo-500" /> :
+             error ? <div className="text-red-500 text-center"><FaExclamationCircle className="mx-auto mb-2 text-2xl"/>{error}</div> :
+             !hasData ? <div className="text-gray-500 text-center"><FaExclamationCircle className="mx-auto mb-2 text-2xl"/>No data available.</div> :
+             children}
+        </div>
+    </div>
+);
 
 const AdminDashboard = () => {
-  // Placeholder data - in a real app, this would come from an API
-  const stats = {
-    totalUsers: 150,
-    totalCourses: 25,
-    totalSessions: 5,
-    attendanceRate: "92%",
-  };
-  
-  // Icons for the cards (using simple text/emojis as placeholders for actual icons)
-  const UserIcon = () => <span className="text-3xl">👥</span>;
-  const CourseIcon = () => <span className="text-3xl">📚</span>;
-  const SessionIcon = () => <span className="text-3xl">🗓️</span>;
-  const AttendanceIcon = () => <span className="text-3xl">✅</span>;
+  const [stats, setStats] = useState({});
+  const [chartData, setChartData] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      try {
+        setLoading(true);
+        // In the next step, we will create these API endpoints
+        const statsPromise = api.get('/api/admin/dashboard-stats');
+        const chartsPromise = api.get('/api/admin/dashboard-charts');
+        
+        const [statsResponse, chartsResponse] = await Promise.all([statsPromise, chartsPromise]);
+        
+        setStats(statsResponse.data);
+        setChartData(chartsResponse.data);
+        setError('');
+      } catch (err) {
+        setError('Failed to load dashboard data. Please try again later.');
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+  }, []);
+
+  const ROLE_COLORS = { 'Admins': '#818CF8', 'Lecturers': '#38BDF8', 'Students': '#6EE7B7' };
 
   return (
-    <div>
-      <h1 className="text-3xl font-bold mb-6">Admin Dashboard</h1>
-      <p className="mb-8 text-gray-600">Welcome! Here's a quick overview of the system.</p>
-      
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard title="Total Users" value={stats.totalUsers} icon={<UserIcon />} />
-        <StatCard title="Total Courses" value={stats.totalCourses} icon={<CourseIcon />} />
-        <StatCard title="Active Sessions" value={stats.totalSessions} icon={<SessionIcon />} />
-        <StatCard title="Overall Attendance" value={stats.attendanceRate} icon={<AttendanceIcon />} />
-      </div>
+    <div className="p-4 md:p-8 bg-gray-50 min-h-screen">
+        <div className="max-w-7xl mx-auto">
+            <div className="mb-8">
+                <h1 className="text-3xl font-bold text-gray-800">Admin Dashboard</h1>
+                <p className="text-gray-600 mt-1">System-wide analytics and management hub.</p>
+            </div>
 
-      {/* Placeholder for future charts or activity feeds */}
-      <div className="mt-8 bg-white p-6 rounded-lg shadow-md">
-        <h2 className="text-xl font-bold mb-4">Recent Activity</h2>
-        <p className="text-gray-500">Activity feed coming soon...</p>
-      </div>
+            {error && <div className="bg-red-100 text-red-700 p-4 rounded-lg mb-6 text-center">{error}</div>}
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <StatCard title="Total Users" value={stats.totalUsers} icon={<FaUsers className="text-indigo-500 text-2xl"/>} loading={loading} />
+                <StatCard title="Total Courses" value={stats.totalCourses} icon={<FaBook className="text-teal-500 text-2xl"/>} loading={loading} />
+                <StatCard title="Active Sessions" value={stats.activeSessions} icon={<FaSignal className="text-sky-500 text-2xl"/>} loading={loading} />
+                <StatCard title="Overall Attendance" value={`${stats.overallAttendance || 0}%`} icon={<FaCheckCircle className="text-emerald-500 text-2xl"/>} loading={loading} />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                <ChartContainer 
+                    title="User Registration Trend" 
+                    icon={<FaChartLine className="text-gray-600 text-xl"/>}
+                    loading={loading} 
+                    error={error}
+                    hasData={chartData.userTrend && chartData.userTrend.length > 0}
+                >
+                    <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={chartData.userTrend} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="date" tick={{fontSize: 12}} />
+                            <YAxis />
+                            <Tooltip />
+                            <Legend />
+                            <Line type="monotone" dataKey="count" stroke="#4f46e5" strokeWidth={2} name="New Users" />
+                        </LineChart>
+                    </ResponsiveContainer>
+                </ChartContainer>
+
+                <ChartContainer 
+                    title="User Role Distribution" 
+                    icon={<FaChartPie className="text-gray-600 text-xl"/>}
+                    loading={loading} 
+                    error={error}
+                    hasData={chartData.userRoles && chartData.userRoles.some(r => r.value > 0)}
+                >
+                     <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                            <Pie data={chartData.userRoles} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} labelLine={false}>
+                                { (chartData.userRoles || []).map((entry, index) => <Cell key={`cell-${index}`} fill={ROLE_COLORS[entry.name]} />) }
+                            </Pie>
+                            <Tooltip />
+                            <Legend iconSize={10} />
+                        </PieChart>
+                    </ResponsiveContainer>
+                </ChartContainer>
+            </div>
+            
+            <div className="bg-white p-6 rounded-xl shadow-lg">
+                <h3 className="text-xl font-bold text-gray-800 mb-4">Management Hub</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                    <Link to="/admin/user-management" className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
+                        <FaUserShield className="text-2xl text-indigo-600 mr-4"/>
+                        <span className="font-semibold text-gray-700">User Management</span>
+                    </Link>
+                    <Link to="/admin/course-management" className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
+                        <FaChalkboardTeacher className="text-2xl text-teal-600 mr-4"/>
+                        <span className="font-semibold text-gray-700">Course Management</span>
+                    </Link>
+                    <Link to="/admin/system-logs" className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
+                        <FaUserGraduate className="text-2xl text-sky-600 mr-4"/>
+                        <span className="font-semibold text-gray-700">System Logs</span>
+                    </Link>
+                </div>
+            </div>
+        </div>
     </div>
   );
 };

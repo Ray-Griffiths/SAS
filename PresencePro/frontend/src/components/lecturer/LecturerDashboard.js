@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
 import { Link } from 'react-router-dom';
@@ -168,8 +169,13 @@ const LecturerDashboard = () => {
                             <Link to="/lecturer/sessions" className="w-full text-center bg-sky-600 hover:bg-sky-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">
                                 Manage My Sessions
                             </Link>
-                            <Link to="/lecturer/attendance" className="w-full text-center bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">
-                                View Attendance Hub
+                            {/* Corrected Link */}
+                            <Link to="/lecturer/reports" className="w-full text-center bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">
+                                View Attendance Reports
+                            </Link>
+                            {/* Added New Quick Action */}
+                            <Link to="/lecturer/student-directory" className="w-full text-center bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">
+                                View Student Directory
                             </Link>
                         </div>
                     </div>

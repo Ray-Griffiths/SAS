@@ -1,12 +1,17 @@
 
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext'; // Import useAuth
+import { useAuth } from '../context/AuthContext';
+
+const NavLink = ({ to, children }) => (
+    <Link to={to} className="text-gray-300 hover:text-white transition-colors duration-200 px-3 py-2 rounded-md text-sm font-medium">
+        {children}
+    </Link>
+);
 
 const Navbar = () => {
-  const { user, logout } = useAuth(); // Access user and logout from AuthContext
+  const { user, logout } = useAuth();
 
-  // Determine the dashboard path based on the user's role
   const getDashboardPath = () => {
     if (!user) return '/';
     switch (user.role) {
@@ -22,34 +27,33 @@ const Navbar = () => {
   };
 
   return (
-    <nav className="bg-gray-800 p-4 text-white">
+    <nav className="bg-indigo-900 p-4 text-white shadow-md sticky top-0 z-50">
       <div className="container mx-auto flex justify-between items-center">
-        {/* Logo or Site Title */}
-        <Link to="/" className="text-xl font-bold">
+        {/* Logo on the left */}
+        <Link to="/" className="text-xl font-bold tracking-wider">
           PresencePro
         </Link>
 
-        {/* Navigation Links */}
-        <div className="flex items-center">
+        {/* Links and Buttons on the right */}
+        <div className="flex items-center space-x-2">
           {user ? (
             <>
-              <Link to="/" className="mr-4">Home</Link>
-              <Link to="/contact" className="mr-4">Contact</Link>
-              
-              {/* --- FIX: Added dynamic dashboard link for all roles --- */}
-              <Link to={getDashboardPath()} className="mr-4 font-semibold text-blue-300 hover:text-blue-400">
-                {user.username}
+              <NavLink to="/">Home</NavLink>
+              <NavLink to="/contact">Contact</NavLink>
+              <Link to={getDashboardPath()} className="font-semibold text-teal-300 hover:text-teal-200 transition-colors px-3 py-2 rounded-md text-sm">
+                Dashboard
               </Link>
-              
-              <button onClick={logout} className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
+              <button onClick={logout} className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-md transition-colors text-sm">
                 Logout
               </button>
             </>
           ) : (
             <>
-              <Link to="/" className="mr-4">Home</Link>
-              <Link to="/contact" className="mr-4">Contact</Link>
-              <Link to="/login" className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Login</Link>
+              <NavLink to="/">Home</NavLink>
+              <NavLink to="/contact">Contact</NavLink>
+              <Link to="/login" className="bg-teal-400 hover:bg-teal-300 text-gray-900 font-bold py-2 px-4 rounded-md transition-all duration-300 text-sm">
+                Login
+              </Link>
             </>
           )}
         </div>
