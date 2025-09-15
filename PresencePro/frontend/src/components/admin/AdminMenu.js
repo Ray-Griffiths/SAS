@@ -1,20 +1,25 @@
 
 import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-// Corrected import for Heroicons v2 - Replaced DocumentReportIcon with DocumentChartBarIcon
-import { HomeIcon, BookOpenIcon, UsersIcon, PresentationChartLineIcon, DocumentChartBarIcon, UserCircleIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/solid';
+import { 
+  HomeIcon, 
+  UsersIcon, 
+  BookOpenIcon, 
+  ClipboardDocumentListIcon, 
+  Cog6ToothIcon,
+  ChevronLeftIcon, 
+  ChevronRightIcon 
+} from '@heroicons/react/24/solid';
 
 const menuItems = [
-  { path: '/lecturer/dashboard', name: 'Dashboard', icon: <HomeIcon className="h-6 w-6" /> },
-  { path: '/lecturer/courses', name: 'Courses', icon: <BookOpenIcon className="h-6 w-6" /> },
-  { path: '/lecturer/student-directory', name: 'Students', icon: <UsersIcon className="h-6 w-6" /> },
-  { path: '/lecturer/sessions', name: 'Sessions', icon: <PresentationChartLineIcon className="h-6 w-6" /> },
-  // Corrected icon usage below
-  { path: '/lecturer/reports', name: 'Reports', icon: <DocumentChartBarIcon className="h-6 w-6" /> },
-  { path: '/lecturer/profile', name: 'Profile', icon: <UserCircleIcon className="h-6 w-6" /> },
+  { path: '/admin', name: 'Dashboard', icon: <HomeIcon className="h-6 w-6" /> },
+  { path: '/admin/users', name: 'Users', icon: <UsersIcon className="h-6 w-6" /> },
+  { path: '/admin/courses', name: 'Courses', icon: <BookOpenIcon className="h-6 w-6" /> },
+  { path: '/admin/system-logs', name: 'System Logs', icon: <ClipboardDocumentListIcon className="h-6 w-6" /> },
+  { path: '/admin/settings', name: 'Settings', icon: <Cog6ToothIcon className="h-6 w-6" /> },
 ];
 
-const LecturerMenu = () => {
+const AdminMenu = () => {
   const [isOpen, setIsOpen] = useState(true);
 
   const activeLinkStyle = {
@@ -32,9 +37,9 @@ const LecturerMenu = () => {
             </button>
         </div>
 
-      {/* Logo/Title */}
+      {/* Title */}
       <div className="px-4 pb-4 border-b border-indigo-800">
-          <h2 className={`text-2xl font-bold text-white transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 h-0'}`}>Menu</h2>
+          <h2 className={`text-2xl font-bold text-white transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 h-0'}`}>Admin Menu</h2>
       </div>
 
       {/* Navigation */}
@@ -44,6 +49,7 @@ const LecturerMenu = () => {
             <li key={item.name} className="px-4">
               <NavLink
                 to={item.path}
+                end={item.path === '/admin'} // Add this to ensure only the exact path is active
                 style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
                 className="flex items-center p-2 rounded-lg hover:bg-indigo-800 transition-colors duration-200"
               >
@@ -58,4 +64,4 @@ const LecturerMenu = () => {
   );
 };
 
-export default LecturerMenu;
+export default AdminMenu;
