@@ -1,7 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { api, getLecturers } from '../../services/api'; // Combined imports
-import { Link } from 'react-router-dom';
 import { 
     PencilIcon, TrashIcon, PlusCircleIcon, MagnifyingGlassIcon, 
     ExclamationTriangleIcon, XCircleIcon, BookOpenIcon 
@@ -193,7 +192,7 @@ const ManageCourses = () => {
                             courses.map(course => (
                                 <tr key={course.id} className="hover:bg-gray-50">
                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-800">
-                                        <Link to={`/admin/courses/${course.id}`} className="hover:text-indigo-600">{course.name}</Link>
+                                        <button onClick={() => { setSelectedCourse(course); setFormModalOpen(true); }} className="text-left hover:text-indigo-600">{course.name}</button>
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{lecturerMap.get(course.lecturer_id) || 'N/A'}</td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-center text-gray-600">{course.total_students || 0}</td>

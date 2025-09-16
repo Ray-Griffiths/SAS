@@ -23,6 +23,7 @@ import ManageCourses from './components/admin/ManageCourses';
 import ManageSessions from './components/admin/ManageSessions';
 import AttendanceReports from './components/admin/AttendanceReports';
 import SystemLogs from './components/admin/SystemLogs';
+import Settings from './components/admin/Settings';
 
 // Lecturer Components
 import LecturerDashboard from './components/lecturer/LecturerDashboard';
@@ -70,6 +71,7 @@ function App() {
           <Route path="sessions" element={<ManageSessions />} />
           <Route path="reports" element={<AttendanceReports />} />
           <Route path="system-logs" element={<SystemLogs />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
 
         {/* --- UPDATED LECTURER ROUTES --- */}

@@ -1,3 +1,4 @@
+
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login as apiLogin, fetchUserProfile } from '../services/api';
@@ -10,16 +11,15 @@ export const AuthProvider = ({ children }) => {
   const navigate = useNavigate();
 
   const loadUserFromToken = async () => {
-    const token = localStorage.getItem('jwt_token');
+    const token = localStorage.getItem('access_token'); // FIX: Use 'access_token'
     if (token) {
       try {
-        // The backend now sends the correct boolean flags
         const userProfile = await fetchUserProfile();
         const fullUser = { ...(userProfile.profile || {}), token };
         setUser(fullUser);
       } catch (error) {
         console.error("Session expired or token invalid:", error);
-        localStorage.removeItem('jwt_token');
+        localStorage.removeItem('access_token'); // FIX: Use 'access_token'
         setUser(null);
       }
     }
@@ -35,16 +35,14 @@ export const AuthProvider = ({ children }) => {
     try {
       const userData = await apiLogin(identifier, password);
       const token = userData.access_token;
-      localStorage.setItem('jwt_token', token);
+      localStorage.setItem('access_token', token); // FIX: Use 'access_token'
 
       const userProfile = await fetchUserProfile();
       const userWithRoles = userProfile.profile;
 
       const fullUser = { ...userWithRoles, token };
-      // This state update is now guaranteed to happen before navigation
       setUser(fullUser);
 
-      // Navigation logic is now inside the context to prevent race conditions
       if (fullUser.is_admin) {
         navigate('/admin', { replace: true });
       } else if (fullUser.is_lecturer) {
@@ -58,8 +56,7 @@ export const AuthProvider = ({ children }) => {
       setLoading(false);
 
     } catch (error) {
-      // Ensure state is cleaned up on failed login
-      localStorage.removeItem('jwt_token');
+      localStorage.removeItem('access_token'); // FIX: Use 'access_token'
       setUser(null);
       setLoading(false);
       throw error; // Re-throw error for the form to catch
@@ -67,7 +64,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    localStorage.removeItem('jwt_token');
+    localStorage.removeItem('access_token'); // FIX: Use 'access_token'
     setUser(null);
     navigate('/login', { replace: true });
   };
