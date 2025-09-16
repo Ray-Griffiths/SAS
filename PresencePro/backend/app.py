@@ -11,12 +11,40 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 from flask_migrate import Migrate
-from flask_jwt_extended import create_access_token, jwt_required, JWTManager, get_jwt_identity
+from flask_jwt_extended import create_access_token, jwt_required, JWTManager, get_jwt_identity, verify_jwt_in_request
 from datetime import datetime, date, time, timedelta, timezone
 from sqlalchemy.exc import IntegrityError
 from functools import wraps
 import re
 from uuid import uuid4
+
+# --- Manual .env loader ---
+# This block loads the JWT_SECRET_KEY from the .env file without needing external libraries.
+try:
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    match = re.match(r'^\s*([\w.-]+)\s*=\s*(.*)?\s*$', line)
+                    if match:
+                        key, value = match.groups()
+                        if value:
+                            # Remove surrounding single or double quotes
+                            value = value.strip('\'"')
+                        os.environ.setdefault(key, value)
+except Exception:
+    # If there's any issue, we'll fall back to the app's default key generation.
+    # It's better to log this in a real app, but for now, we'll pass silently.
+    pass
+# --- End of manual loader ---
+
+# Add parent directory to sys.path for absolute imports
+from flask_cors import CORS
+from flask import send_from_directory # Import send_from_directory
+
+# ... the rest of your app.py file continues here ...
 
 # Add parent directory to sys.path for absolute imports
 from flask_cors import CORS
@@ -26,6 +54,7 @@ from flask import send_from_directory # Import send_from_directory
 try:
     from models.database import db, Student, User, Course, Session, Attendance, TokenDenylist, SystemLog
     from utils.qr_code import generate_qr_code_data
+    from models.settings import Setting
 except ImportError as e:
     logging.error(f"Failed to import models.database or utils.qr_code: {e}")
     traceback.print_exc()
@@ -106,6 +135,25 @@ def init_db_command():
             logger.warning("Using default admin password. Please change it immediately.")
     else:
         logger.info("Admin user already exists.")
+
+    # Check for and create default application settings
+    default_settings = {
+        'session_timeout': {'value': '60', 'description': 'The idle time in minutes before a user is automatically logged out.'},
+        'password_policy': {'value': '{"min_length": 8, "require_special": true, "require_number": true}', 'description': 'JSON-encoded password complexity rules.'},
+        'qr_code_expiration': {'value': '60', 'description': 'How long a QR code remains valid for scanning (in seconds).'},
+        'late_grace_period': {'value': '5', 'description': 'Grace period in minutes after a session starts where students can still be marked "Present".'},
+        'application_timezone': {'value': 'UTC', 'description': 'The default application timezone.'}
+    }
+
+    for key, data in default_settings.items():
+        if not db.session.query(Setting).filter_by(key=key).first():
+            new_setting = Setting(key=key, value=data['value'], description=data['description'])
+            db.session.add(new_setting)
+            logger.info(f"Creating default setting: {key}")
+
+    db.session.commit()
+    logger.info("Default application settings checked/created.")
+    
     print("Database initialized.")
 
 # Deferred imports for utilities
@@ -137,15 +185,28 @@ def check_if_token_is_revoked(jwt_header, jwt_payload):
 def role_required(allowed_roles):
     def decorator(f):
         @wraps(f)
-        @jwt_required()
         def decorated_function(*args, **kwargs):
+            # First, explicitly verify that a valid JWT is present in the request
+            try:
+                verify_jwt_in_request()
+            except Exception as e:
+                # This will handle cases like missing, expired, or invalid tokens
+                logger.error(f"JWT verification failed: {str(e)}")
+                return jsonify({"message": "Missing or invalid token"}), 401
+
+            # If the token is valid, proceed with role-based authorization
             current_user_identity = get_jwt_identity()
             current_user = db.session.query(User).filter_by(username=current_user_identity).first()
+
             if not current_user:
                 logger.warning(f"Attempted access by unknown user identity: {current_user_identity}")
                 return jsonify({"message": "User not found or token invalid"}), 404
+
             if current_user.is_admin or (current_user.role in allowed_roles):
+                # If authorized, call the actual route function, passing the user object
                 return f(current_user, *args, **kwargs)
+            
+            # If not authorized, log the attempt and return a forbidden error
             logger.warning(f"Unauthorized access attempt by {current_user.username} (role: {current_user.role}) to {request.path}")
             add_system_log('WARNING', current_user.username, 'INSUFFICIENT_PERMISSIONS', f"User '{current_user.username}' attempted to access '{request.path}' without sufficient permissions.")
             return jsonify({"message": "Insufficient permissions"}), 403
@@ -287,14 +348,15 @@ def register_user_route(): # Renamed to avoid conflict if a function with the sa
 
 # --- User Management Routes ---
 @app.route('/api/my-profile', methods=['GET'])
-@jwt_required()
-def get_my_profile():
+@role_required(['admin', 'lecturer', 'student']) # MODIFIED: Use the correct decorator
+def get_my_profile(current_user): # MODIFIED: Accept the user object
     """Allows a logged-in user to retrieve their linked profile (User + Student if exists)."""
-    current_user_identity = get_jwt_identity()
-    current_user = db.session.query(User).filter_by(username=current_user_identity).first()
+    # The 'current_user' is now passed directly from the 'role_required' decorator.
+    # The old, manual user lookup has been removed.
 
     if not current_user:
-        logger.warning(f"User not found for identity: {current_user_identity}")
+        # This check is now mostly for safety; the decorator should prevent this.
+        logger.warning(f"Profile access attempt with invalid token.")
         return jsonify({"status": "error", "message": "User not found or token invalid"}), 401
 
     # Add boolean flags for roles to make frontend logic simpler and more robust
@@ -522,6 +584,51 @@ def get_admin_dashboard_charts(current_user):
     except Exception as e:
         logger.error(f"Error fetching admin dashboard charts: {str(e)}", exc_info=True)
         return jsonify({"message": "Error fetching dashboard chart data"}), 500
+
+# --- Application Settings API Endpoints ---
+
+@app.route('/api/admin/settings', methods=['GET'])
+@role_required(['admin'])
+def get_settings(current_user):
+    """
+    Fetches all application settings for the admin settings page.
+    """
+    try:
+        settings = db.session.query(Setting).all()
+        settings_data = {setting.key: setting.value for setting in settings}
+        return jsonify(settings_data), 200
+    except Exception as e:
+        logger.error(f"Error fetching application settings: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while fetching settings."}), 500
+
+@app.route('/api/admin/settings', methods=['PUT'])
+@role_required(['admin'])
+def update_settings(current_user):
+    """
+    Updates multiple application settings at once.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No update data provided"}), 400
+
+    try:
+        for key, value in data.items():
+            setting_to_update = db.session.query(Setting).filter_by(key=key).first()
+            if setting_to_update:
+                setting_to_update.value = str(value)  # Ensure value is stored as a string
+            else:
+                # Optionally, you could log a warning for keys that don't exist
+                logger.warning(f"Attempted to update a non-existent setting: '{key}'")
+
+        db.session.commit()
+        add_system_log('INFO', current_user.username, 'SETTINGS_UPDATED', f"Admin '{current_user.username}' updated application settings.")
+        logger.info(f"Application settings updated by {current_user.username}")
+        
+        return jsonify({"message": "Settings updated successfully"}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error updating application settings: {str(e)}", exc_info=True)
+        return jsonify({"message": "An error occurred while updating settings."}), 500
 
 # --- System Log Helper ---
 def add_system_log(level, user, action, description=None, details=None):

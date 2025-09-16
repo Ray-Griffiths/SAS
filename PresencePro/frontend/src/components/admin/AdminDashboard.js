@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { 
     FaUsers, FaBook, FaSignal, FaCheckCircle, FaChartLine, 
     FaChartPie, FaSpinner, FaExclamationCircle, FaUserShield, 
-    FaChalkboardTeacher, FaUserGraduate 
+    FaChalkboardTeacher, FaUserGraduate, FaCogs
 } from 'react-icons/fa';
 import { 
     ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
@@ -47,12 +47,12 @@ const AdminDashboard = () => {
   const [chartData, setChartData] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        // In the next step, we will create these API endpoints
         const statsPromise = api.get('/api/admin/dashboard-stats');
         const chartsPromise = api.get('/api/admin/dashboard-charts');
         
@@ -132,19 +132,23 @@ const AdminDashboard = () => {
             
             <div className="bg-white p-6 rounded-xl shadow-lg">
                 <h3 className="text-xl font-bold text-gray-800 mb-4">Management Hub</h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                    <Link to="/admin/user-management" className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 gap-4">
+                    <button onClick={() => navigate('/admin/users')} className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
                         <FaUserShield className="text-2xl text-indigo-600 mr-4"/>
                         <span className="font-semibold text-gray-700">User Management</span>
-                    </Link>
-                    <Link to="/admin/course-management" className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
+                    </button>
+                    <button onClick={() => navigate('/admin/courses')} className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
                         <FaChalkboardTeacher className="text-2xl text-teal-600 mr-4"/>
                         <span className="font-semibold text-gray-700">Course Management</span>
-                    </Link>
-                    <Link to="/admin/system-logs" className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
+                    </button>
+                    <button onClick={() => navigate('/admin/system-logs')} className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
                         <FaUserGraduate className="text-2xl text-sky-600 mr-4"/>
                         <span className="font-semibold text-gray-700">System Logs</span>
-                    </Link>
+                    </button>
+                     <button onClick={() => navigate('/admin/settings')} className="flex items-center p-4 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors">
+                        <FaCogs className="text-2xl text-slate-600 mr-4"/>
+                        <span className="font-semibold text-gray-700">Application Settings</span>
+                    </button>
                 </div>
             </div>
         </div>

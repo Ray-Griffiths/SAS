@@ -10,7 +10,7 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('jwt_token');
+    const token = localStorage.getItem('access_token');
     if (token) {
       config.headers['Authorization'] = `Bearer ${token}`;
     }
@@ -35,11 +35,11 @@ export const logoutApi = async () => {
   try {
     const response = await api.post('/api/logout', {});
     if (response.status === 200) {
-      localStorage.removeItem('jwt_token');
+      localStorage.removeItem('access_token');
     }
     return response.data;
   } catch (error) {
-    localStorage.removeItem('jwt_token');
+    localStorage.removeItem('access_token');
     throw error;
   }
 };

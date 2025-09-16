@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
 import { useNavigate } from 'react-router-dom';
 import CourseForm from './CourseForm';
-import { FaUsers, FaClipboardList, FaEdit, FaTrash, FaPlus } from 'react-icons/fa';
+import { FaUsers, FaClipboardList, FaEdit, FaTrash, FaPlus, FaBook } from 'react-icons/fa';
 
 const ManageCoursesLecturer = () => {
   const [courses, setCourses] = useState([]);
@@ -30,10 +30,6 @@ const ManageCoursesLecturer = () => {
   useEffect(() => {
     fetchLecturerCourses();
   }, []);
-
-  const handleViewSessions = (courseId) => {
-    navigate(`/lecturer/courses/${courseId}/sessions`);
-  };
 
   const handleAddOrUpdateCourse = async (courseData) => {
     try {
@@ -124,7 +120,14 @@ const ManageCoursesLecturer = () => {
                 </div>
                 <div className="bg-gray-50 p-3 rounded-b-xl grid grid-cols-2 gap-2">
                   <button 
-                      onClick={() => handleViewSessions(course.id)} 
+                      onClick={() => navigate(`/lecturer/courses/${course.id}/students`)} 
+                      className="w-full inline-flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                  >
+                      <FaUsers className="mr-2"/>
+                      Students
+                  </button>
+                  <button 
+                      onClick={() => navigate(`/lecturer/courses/${course.id}/sessions`)} 
                       className="w-full inline-flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                   >
                       <FaClipboardList className="mr-2"/>
@@ -139,10 +142,10 @@ const ManageCoursesLecturer = () => {
                   </button>
                   <button 
                       onClick={() => handleDeleteCourse(course.id)} 
-                      className="col-span-2 w-full inline-flex items-center justify-center mt-2 px-3 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                      className="w-full inline-flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
                   >
                       <FaTrash className="mr-2"/>
-                      Delete Course
+                      Delete
                   </button>
                 </div>
               </div>
