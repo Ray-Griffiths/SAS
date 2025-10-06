@@ -1,14 +1,14 @@
 
 import React, { useState, useEffect } from 'react';
 import { api } from '../../services/api';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { 
     FaUsers, FaBook, FaSignal, FaCheckCircle, FaChartLine, 
     FaChartPie, FaSpinner, FaExclamationCircle, FaUserShield, 
     FaChalkboardTeacher, FaUserGraduate, FaCogs
 } from 'react-icons/fa';
 import { 
-    ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
+    ResponsiveContainer, XAxis, YAxis, CartesianGrid, 
     Tooltip, Legend, PieChart, Pie, Cell, LineChart, Line 
 } from 'recharts';
 

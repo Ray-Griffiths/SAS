@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import CreateSessionModal from './CreateSession'; 
@@ -13,7 +13,7 @@ const ViewSessions = () => {
   const [error, setError] = useState(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       const [courseRes, sessionsRes] = await Promise.all([
@@ -29,11 +29,11 @@ const ViewSessions = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [courseId]);
 
   useEffect(() => {
     fetchData();
-  }, [courseId]);
+  }, [fetchData]);
 
   const handleSessionCreated = () => {
     fetchData();

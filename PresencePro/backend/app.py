@@ -18,6 +18,20 @@ from functools import wraps
 import re
 from uuid import uuid4
 
+from werkzeug.utils import secure_filename
+
+# --- Uploads Configuration ---
+# This sets up the folder where profile pictures will be stored.
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads', 'profile_pics')
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+def allowed_file(filename):
+    """Checks if a file's extension is in the ALLOWED_EXTENSIONS set."""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
 # --- Manual .env loader ---
 # This block loads the JWT_SECRET_KEY from the .env file without needing external libraries.
 try:
@@ -346,20 +360,67 @@ def register_user_route(): # Renamed to avoid conflict if a function with the sa
         logger.error(f"Error registering user {username}: {str(e)}", exc_info=True)
         return jsonify({"message": "Error during registration"}), 500
 
+# --- NEW LECTURER SELF-REGISTRATION ENDPOINT ---
+@app.route('/api/register/lecturer', methods=['POST'])
+def register_lecturer():
+    """
+    Allows a new lecturer to register themselves.
+    This is a public endpoint.
+    """
+    data = request.get_json()
+    if not data or not data.get('email') or not data.get('password') or not data.get('name'):
+        return jsonify({"message": "Missing required fields: name, email, and password"}), 400
+
+    email = data['email'].lower()
+    name = data['name'].strip()
+    password = data['password']
+
+    # Basic validation
+    if len(password) < 8:
+        return jsonify({"message": "Password must be at least 8 characters long"}), 400
+    
+    # Check if username (from 'name' field) or email already exists
+    if db.session.query(User).filter_by(username=name).first():
+        return jsonify({"message": "This name is already taken as a username"}), 409
+    if db.session.query(User).filter_by(email=email).first():
+        return jsonify({"message": "An account with this email already exists"}), 409
+
+    try:
+        # Securely hash the password using the project's standard method
+        hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
+
+        # Create the new user with the lecturer role
+        new_user = User(
+            username=name,  # Use the 'name' from the form as the username
+            password=hashed_password,
+            email=email,
+            role='lecturer',
+            is_admin=False
+        )
+        db.session.add(new_user)
+        db.session.commit()
+
+        logger.info(f"New lecturer registered successfully: {name} ({email})")
+        return jsonify({"message": "Lecturer account created successfully. You can now log in."}), 201
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error during lecturer registration for {email}: {e}")
+        return jsonify({"message": "An internal error occurred. Please try again later."}), 500
+
 # --- User Management Routes ---
 @app.route('/api/my-profile', methods=['GET'])
-@role_required(['admin', 'lecturer', 'student']) # MODIFIED: Use the correct decorator
-def get_my_profile(current_user): # MODIFIED: Accept the user object
+@role_required(['admin', 'lecturer', 'student'])
+def get_my_profile(current_user):
     """Allows a logged-in user to retrieve their linked profile (User + Student if exists)."""
-    # The 'current_user' is now passed directly from the 'role_required' decorator.
-    # The old, manual user lookup has been removed.
-
     if not current_user:
-        # This check is now mostly for safety; the decorator should prevent this.
         logger.warning(f"Profile access attempt with invalid token.")
         return jsonify({"status": "error", "message": "User not found or token invalid"}), 401
 
-    # Add boolean flags for roles to make frontend logic simpler and more robust
+    # --- FIX: Construct absolute URL for the profile picture ---
+    base_url = request.host_url.rstrip('/')
+    profile_pic_url = f"{base_url}{current_user.profile_picture_url}" if current_user.profile_picture_url else None
+
     user_profile = {
         "id": current_user.id,
         "username": current_user.username,
@@ -367,7 +428,8 @@ def get_my_profile(current_user): # MODIFIED: Accept the user object
         "role": current_user.role,
         "is_admin": current_user.is_admin,
         "is_student": current_user.role == 'student',
-        "is_lecturer": current_user.role == 'lecturer'
+        "is_lecturer": current_user.role == 'lecturer',
+        "profile_picture_url": profile_pic_url  # Use the absolute URL
     }
 
     # If the user is a student, include their linked student profile data
@@ -396,64 +458,178 @@ def get_my_profile(current_user): # MODIFIED: Accept the user object
     return jsonify({"status": "success", "profile": user_profile}), 200
 
 @app.route('/api/my-profile', methods=['PUT'])
-@jwt_required()
-def update_my_profile():
-    """Allows a logged-in user (student role) to update their linked student profile."""
-    current_user_identity = get_jwt_identity()
-    current_user = db.session.query(User).filter_by(username=current_user_identity).first()
-    # TODO: Implement update logic here
-    if not current_user:
-        return jsonify({"status": "error", "message": "User not found or token invalid"}), 401
+@role_required(['admin', 'lecturer', 'student'])
+def update_my_profile(current_user):
+    """
+    Allows a logged-in user to update their own profile information,
+    including name, email, and password.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"message": "No update data provided"}), 400
+
+    user_to_update = db.session.query(User).get(current_user.id)
+    if not user_to_update:
+         return jsonify({"message": "User not found"}), 404
+         
+    # --- Handle Name and Email Update ---
+    if 'name' in data:
+        new_name = data['name'].strip()
+        if not new_name:
+            return jsonify({"message": "Name cannot be empty"}), 400
+        # Check for uniqueness if the username is being changed
+        if new_name != user_to_update.username and db.session.query(User).filter_by(username=new_name).first():
+            return jsonify({"message": "This username is already taken"}), 409
+        user_to_update.username = new_name
+
+    if 'email' in data:
+        new_email = data['email'].strip()
+        # --- FIX: Corrected the regular expression for email validation ---
+        if not re.match(r'^[\w.-]+@[\w.-]+\.\w+$', new_email):
+             return jsonify({"message": "Invalid email format"}), 400
+        # Check for uniqueness if the email is being changed
+        if new_email != user_to_update.email and db.session.query(User).filter_by(email=new_email).first():
+            return jsonify({"message": "This email is already in use"}), 409
+        user_to_update.email = new_email
+
+    # If the user is a student, ensure their linked student profile is also updated
+    if user_to_update.role == 'student' and user_to_update.student_profile:
+        if 'name' in data:
+            user_to_update.student_profile.name = data['name'].strip()
+        if 'email' in data:
+             user_to_update.student_profile.email = data['email'].strip()
+
+    # --- Handle Password Change ---
+    if 'new_password' in data and data['new_password']:
+        current_password = data.get('current_password')
+        new_password = data['new_password']
+
+        if not current_password:
+            return jsonify({"message": "Your current password is required to set a new one."}), 400
+
+        if not check_password_hash(user_to_update.password, current_password):
+            return jsonify({"message": "Incorrect current password."}), 403
+
+        if len(new_password) < 8:
+            return jsonify({"message": "New password must be at least 8 characters long."}), 400
+        user_to_update.password = generate_password_hash(new_password, method='pbkdf2:sha256')
+
+    try:
+        db.session.commit()
+        logger.info(f"User profile for '{user_to_update.username}' was updated.")
+        return jsonify({"message": "Profile updated successfully"}), 200
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"message": "A user with this username or email already exists."}), 409
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error updating profile for {current_user.username}: {str(e)}", exc_info=True)
+        return jsonify({"message": "An unexpected error occurred while updating the profile."}), 500
+
+@app.route('/uploads/profile_pics/<filename>')
+def uploaded_profile_pic(filename):
+    """Serves uploaded profile pictures from the designated folder."""
+    return send_from_directory(UPLOAD_FOLDER, filename)
+
+
+@app.route('/api/my-profile/picture', methods=['POST'])
+@role_required(['admin', 'lecturer', 'student'])
+def update_my_profile_picture(current_user):
+    """Handles the upload of a new profile picture for the logged-in user."""
+    if 'profile_picture' not in request.files:
+        return jsonify({"message": "No profile picture file found in the request."}), 400
+
+    file = request.files['profile_picture']
+
+    if file.filename == '':
+        return jsonify({"message": "No file selected for upload."}), 400
+
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        unique_filename = f"{current_user.id}_{int(datetime.utcnow().timestamp())}_{filename}"
+        save_path = os.path.join(UPLOAD_FOLDER, unique_filename)
+        
+        try:
+            user_to_update = db.session.query(User).get(current_user.id)
+            if user_to_update.profile_picture_url:
+                old_filename = os.path.basename(user_to_update.profile_picture_url)
+                old_path = os.path.join(UPLOAD_FOLDER, old_filename)
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+            
+            file.save(save_path)
+            
+            # --- FIX: Store relative URL in DB, but return absolute URL to frontend ---
+            relative_url = f'/uploads/profile_pics/{unique_filename}'
+            user_to_update.profile_picture_url = relative_url
+            db.session.commit()
+            
+            base_url = request.host_url.rstrip('/')
+            absolute_url = f"{base_url}{relative_url}"
+            
+            logger.info(f"Profile picture updated for user '{current_user.username}'.")
+            return jsonify({
+                "message": "Profile picture updated successfully.",
+                "profile_picture_url": absolute_url # Return the full, absolute URL
+            }), 200
+
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Error saving profile picture for '{current_user.username}': {str(e)}", exc_info=True)
+            return jsonify({"message": "An error occurred while saving the picture."}), 500
+
+    return jsonify({"message": "Invalid file type. Allowed types are: png, jpg, jpeg, gif."}), 400
 
 @app.route('/api/users', methods=['GET'])
 @role_required(['admin'])
 def get_users(current_user):
     """
-    Fetches a paginated list of users, with support for searching and role-based filtering.
+    Fetches a paginated list of all users, joining with student profiles to include names.
+    This ensures all roles (admin, lecturer, student) are displayed correctly.
     """
     try:
-        # --- 1. Get parameters from the request query string ---
         page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 10, type=int) # Set a default of 10 per page
+        per_page = request.args.get('per_page', 10, type=int)
         search_term = request.args.get('search', '', type=str).strip()
         role_filter = request.args.get('role', 'all', type=str).lower().strip()
 
-        # --- 2. Build the database query dynamically ---
-        query = db.session.query(User)
+        # --- THE FIX: Join User with Student to fetch the student's name ---
+        # A left outer join ensures all users (including admins/lecturers) are included.
+        query = db.session.query(User, Student.name).outerjoin(Student, User.id == Student.user_id)
 
-        # Apply search filter if a search term is provided
+        # Apply search filter - now searches student name as well as username/email
         if search_term:
             from sqlalchemy import or_
             search_pattern = f'%{search_term}%'
             query = query.filter(
                 or_(
                     User.username.ilike(search_pattern),
-                    User.email.ilike(search_pattern)
+                    User.email.ilike(search_pattern),
+                    Student.name.ilike(search_pattern) # Also search by the student's actual name
                 )
             )
 
-        # Apply role filter if a specific role (and not 'all') is selected
+        # Apply role filter
         if role_filter != 'all':
             query = query.filter(User.role == role_filter)
         
-        # Order the results for consistent pagination
         query = query.order_by(User.id)
 
-        # --- 3. Execute the paginated query ---
         users_pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
-        # --- 4. Serialize the results ---
-        users_data = [
-            {
+        # --- THE FIX: Serialize results to include the 'name' field ---
+        users_data = []
+        for user, student_name in users_pagination.items:
+            users_data.append({
                 "id": user.id, 
                 "username": user.username, 
                 "email": user.email,
-                "role": user.role
-            }
-            for user in users_pagination.items
-        ]
+                "role": user.role,
+                # Use the joined student_name if it exists (for students),
+                # otherwise default to the username (for admins/lecturers).
+                "name": student_name if student_name else user.username 
+            })
 
-        # --- 5. Return the JSON response ---
         return jsonify({
             "users": users_data,
             "total": users_pagination.total,
@@ -1365,6 +1541,10 @@ def get_lecturer_courses(current_user):
 @app.route('/api/users', methods=['POST'])
 @role_required(['admin'])
 def create_user(current_user):
+    """
+    Creates a new user. If the role is 'student', it also creates the linked student profile.
+    This is called from the Admin's "Add User" form.
+    """
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided"}), 400
@@ -1374,55 +1554,84 @@ def create_user(current_user):
     email = data.get('email', '').strip()
     role = data.get('role', 'student').lower()
     is_admin = data.get('is_admin', False)
+    
+    # Additional data needed ONLY for students
+    student_id = data.get('student_id', '').strip()
+    name = data.get('name', '').strip()
 
-    if not username or not password or not email:
-        return jsonify({"message": "Username, password, and email are required"}), 400
+    # --- Validation ---
+    if not username or not password or not email or not role:
+        return jsonify({"message": "Username, password, email, and role are required"}), 400
+    
+    if role == 'student':
+        if not student_id:
+            return jsonify({"message": "Student ID is required when creating a 'student' role."}), 400
+        if not name:
+            # If a student's full name isn't provided, use their username as a fallback.
+            name = username
 
-    if not re.match(r'^[a-zA-Z0-9_]{3,50}$', username):
-        return jsonify({"message": "Username must be 3-50 alphanumeric characters or underscores"}), 400
-    if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
-        return jsonify({"message": "Invalid email format"}), 400
-    if len(password) < 8:
-        return jsonify({"message": "Password must be at least 8 characters long"}), 400
-    if role not in ['student', 'lecturer', 'admin']:
-        return jsonify({"message": f"Invalid role '{role}'. Allowed roles are: student, lecturer, admin"}), 400
+    # --- Uniqueness Checks ---
+    if db.session.query(User).filter((User.username == username) | (User.email == email)).first():
+        return jsonify({"message": "A user with this username or email already exists"}), 409
 
-    if db.session.query(User).filter_by(username=username).first():
-        return jsonify({"message": "Username already exists"}), 409
-    if db.session.query(User).filter_by(email=email).first():
-        return jsonify({"message": "Email already exists"}), 409
+    if role == 'student' and db.session.query(Student).filter_by(student_id=student_id).first():
+        return jsonify({"message": f"A student with the ID '{student_id}' already exists"}), 409
 
     try:
         hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
-        new_user = User(
-            username=username,
-            password=hashed_password,
-            email=email,
-            role=role,
-            is_admin=is_admin
-        )
-        db.session.add(new_user)
+        
+        if role == 'student':
+            new_user = User(username=username, password=hashed_password, email=email, role='student', is_admin=False)
+            new_user.student_profile = Student(student_id=student_id, name=name, email=email)
+            # --- FIX: Only the parent (new_user) should be added to the session. ---
+            # The linked student_profile is handled automatically by the cascade we set up.
+            db.session.add(new_user)
+        else: # For 'admin' or 'lecturer'
+            new_user = User(
+                username=username,
+                password=hashed_password,
+                email=email,
+                role=role,
+                is_admin=is_admin
+            )
+            db.session.add(new_user)
+        
         db.session.commit()
-        logger.info(f"User {username} created by {current_user.username}")
-        add_system_log('INFO', current_user.username, 'USER_CREATED', f"Admin '{current_user.username}' created new user '{username}' with role '{role}'.")
+        
+        log_message = f"Admin '{current_user.username}' created new user '{username}' with role '{role}'."
+        logger.info(log_message)
+        add_system_log('INFO', current_user.username, 'USER_CREATED', log_message)
+        
         return jsonify({"message": "User created successfully", "user_id": new_user.id}), 201
-    except IntegrityError:
+
+    except IntegrityError as e:
         db.session.rollback()
-        return jsonify({"message": "A user with this username or email already exists"}), 409
+        logger.error(f"Database conflict while creating user {username}: {str(e)}")
+        return jsonify({"message": "A database conflict occurred. The username, email, or student ID may already be in use."}), 409
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error creating user {username}: {str(e)}", exc_info=True)
-        return jsonify({"message": "Error creating user"}), 500
+        return jsonify({"message": "An unexpected error occurred while creating the user"}), 500
 
 @app.route('/api/users/<int:user_id>', methods=['GET'])
 @jwt_required()
 def get_user(user_id):
+    """
+    Fetches the details for a single user, joining with the student profile if it exists.
+    """
     current_user_identity = get_jwt_identity()
     current_user = db.session.query(User).filter_by(username=current_user_identity).first()
-    requested_user = db.session.query(User).get(user_id)
+    
+    # --- THE FIX: Join User with Student to fetch the student's name ---
+    requested_user_data = db.session.query(User, Student.name).outerjoin(
+        Student, User.id == Student.user_id
+    ).filter(User.id == user_id).first()
 
-    if not requested_user:
+    if not requested_user_data:
         return jsonify({"message": "User not found"}), 404
+        
+    requested_user, student_name = requested_user_data
+
     if not current_user.is_admin and current_user.id != user_id:
         return jsonify({"message": "Unauthorized to access this user's information"}), 403
 
@@ -1431,7 +1640,9 @@ def get_user(user_id):
         "username": requested_user.username,
         "email": requested_user.email,
         "is_admin": requested_user.is_admin,
-        "role": requested_user.role
+        "role": requested_user.role,
+        # --- THE FIX: Include the 'name' field ---
+        "name": student_name if student_name else requested_user.username
     }), 200
 
 @app.route('/api/users/<int:user_id>', methods=['PUT'])
@@ -1533,7 +1744,10 @@ def delete_user(user_id):
 @app.route('/api/lecturer/students', methods=['POST'])
 @role_required(['lecturer', 'admin'])
 def create_student_by_lecturer(current_user):
-    """Allows lecturers and admins to create student profiles."""
+    """
+    Allows lecturers and admins to create a new student profile and a corresponding user account.
+    The student's ID is used as their initial username and password.
+    """
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided"}), 400
@@ -1543,33 +1757,55 @@ def create_student_by_lecturer(current_user):
     name = data.get('name', '').strip()
     email = data.get('email', '').strip()
 
-    if not student_id or not name:
-        return jsonify({"message": "Student ID and name are required"}), 400
+    if not student_id or not name or not email:
+        return jsonify({"message": "Student ID, name, and email are required"}), 400
 
-    # Basic email validation if email is provided
-    if email and not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
+    if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
         return jsonify({"message": "Invalid email format"}), 400
 
-    # Check for existing student ID or email
-    if db.session.query(Student).filter_by(student_id=student_id).first():
-        return jsonify({"message": f"Student with ID {student_id} already exists"}), 409
-    if email and db.session.query(Student).filter_by(email=email).first():
-        # Return conflict if email exists only if the provided email is not empty
-        if email:
-            return jsonify({"message": "Email already exists"}), 409
+    # Check for existing student ID or email in both Student and User tables
+    if db.session.query(Student).filter(db.or_(Student.student_id == student_id, Student.email == email)).first():
+        return jsonify({"message": "A student with this ID or email already exists"}), 409
+    if db.session.query(User).filter(db.or_(User.username == student_id, User.email == email)).first():
+        return jsonify({"message": "A user with this username (student ID) or email already exists"}), 409
 
     try:
-        # We are only creating the Student profile here, not linking to a User yet.
-        # Linking a Student profile to a User account would be a separate step.
-        new_student = Student(student_id=student_id, name=name, email=email, user_id=None) # Initialize user_id to None
-        db.session.add(new_student)
+        # Create the new user account
+        hashed_password = generate_password_hash(student_id, method='pbkdf2:sha256')
+        new_user = User(
+            username=student_id,
+            password=hashed_password,
+            email=email,
+            role='student'
+        )
+
+        # Create the new student profile
+        new_student = Student(
+            student_id=student_id,
+            name=name,
+            email=email
+        )
+        
+        # Explicitly link the user to the student profile to ensure the relationship is set
+        new_user.student_profile = new_student
+        
+        # Add the parent object (User) to the session. The linked Student will be saved via cascade.
+        db.session.add(new_user)
         db.session.commit()
-        logger.info(f"Student profile {student_id} created by {current_user.username}")
+        
+        log_message = f"Student '{name}' ({student_id}) created by {current_user.username}."
+        logger.info(log_message)
+        add_system_log('INFO', current_user.username, 'STUDENT_CREATED', log_message)
+
         return jsonify({
-            "message": "Student profile created successfully",
-            "id": new_student.id,
-            "student_id": new_student.student_id
+            "message": "Student and user account created successfully. The initial password is the student ID.",
+            "user_id": new_user.id,
+            "student_id": new_student.id
             }), 201
+            
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"message": "A database conflict occurred. The student ID or email may already be in use."}), 409
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error creating student profile {student_id}: {str(e)}", exc_info=True)
@@ -1850,6 +2086,11 @@ def update_course(course_id):
 @app.route('/api/students', methods=['POST'])
 @role_required(['admin'])
 def create_student(current_user):
+    """
+    Creates a new student profile.
+    - If no `user_id` is provided, it atomically creates both a User and a Student record.
+    - If a `user_id` is provided, it links the new Student profile to that existing User.
+    """
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided"}), 400
@@ -1857,40 +2098,88 @@ def create_student(current_user):
     student_id = data.get('student_id', '').strip()
     name = data.get('name', '').strip()
     email = data.get('email', '').strip()
-    user_id = data.get('user_id')
+    user_id_to_link = data.get('user_id')
 
-    if not student_id or not name:
-        return jsonify({"message": "Student ID and name are required"}), 400
-    if email and not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
+    # --- Validation ---
+    if not student_id or not name or not email:
+        return jsonify({"message": "Student ID, name, and email are required"}), 400
+    if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
         return jsonify({"message": "Invalid email format"}), 400
 
     if db.session.query(Student).filter_by(student_id=student_id).first():
-        return jsonify({"message": f"Student with ID {student_id} already exists"}), 409
-    if email and db.session.query(Student).filter_by(email=email).first():
-        return jsonify({"message": "Email already exists"}), 409
-
-    if user_id:
-        user = db.session.query(User).get(user_id)
-        if not user:
-            return jsonify({"message": f"User with ID {user_id} not found"}), 400
-        if user.is_admin:
-            return jsonify({"message": "Cannot link student to an administrator account"}), 400
-        if db.session.query(Student).filter_by(user_id=user_id).first():
-            return jsonify({"message": f"User ID {user_id} is already linked to another student"}), 409
+        return jsonify({"message": f"A student with ID '{student_id}' already exists"}), 409
 
     try:
-        new_student = Student(student_id=student_id, name=name, email=email, user_id=user_id)
-        db.session.add(new_student)
-        db.session.commit()
-        logger.info(f"Student {student_id} created by {current_user.username}")
-        return jsonify({"message": "Student created successfully", "id": new_student.id, "student_id": new_student.student_id}), 201
+        # --- Case 1: Create a new User and a new Student ---
+        if not user_id_to_link:
+            if db.session.query(User).filter(db.or_(User.username == student_id, User.email == email)).first():
+                return jsonify({"message": "A user with this Student ID (as username) or email already exists."}), 409
+
+            hashed_password = generate_password_hash(student_id, method='pbkdf2:sha256')
+            new_user = User(
+                username=student_id,
+                password=hashed_password,
+                email=email,
+                role='student'
+            )
+            
+            new_student = Student(
+                student_id=student_id,
+                name=name,
+                email=email
+            )
+            
+            # Explicitly link the user to the student profile
+            new_user.student_profile = new_student
+            
+            db.session.add(new_user)
+            db.session.commit()
+
+            log_message = f"Admin '{current_user.username}' created student '{name}' ({student_id}) and a new linked user account."
+            response_message = "Student and user account created successfully. The initial password is the student ID."
+            
+            add_system_log('INFO', current_user.username, 'STUDENT_CREATED', log_message)
+            logger.info(log_message)
+
+            return jsonify({
+                "message": response_message,
+                "student_id": new_student.id,
+                "user_id": new_user.id
+            }), 201
+
+        # --- Case 2: Link to an existing User ---
+        else:
+            user = db.session.query(User).get(user_id_to_link)
+            if not user:
+                return jsonify({"message": f"User with ID {user_id_to_link} not found"}), 404
+            if user.role != 'student':
+                return jsonify({"message": "Can only link to a user with the 'student' role"}), 400
+            if user.student_profile:
+                return jsonify({"message": f"User ID {user.id} is already linked to another student"}), 409
+
+            new_student = Student(student_id=student_id, name=name, email=email, user_id=user.id)
+            db.session.add(new_student)
+            db.session.commit()
+
+            log_message = f"Admin '{current_user.username}' created student '{name}' ({student_id}) and linked it to existing user ID {user.id}."
+            response_message = "Student created and linked to existing user successfully."
+
+            add_system_log('INFO', current_user.username, 'STUDENT_LINKED', log_message)
+            logger.info(log_message)
+
+            return jsonify({
+                "message": response_message,
+                "id": new_student.id,
+                "student_id": new_student.student_id
+            }), 201
+
     except IntegrityError:
         db.session.rollback()
-        return jsonify({"message": "A student with this ID or email already exists"}), 409
+        return jsonify({"message": "A database conflict occurred. A student or user with this ID or email may already exist."}), 409
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error creating student {student_id}: {str(e)}", exc_info=True)
-        return jsonify({"message": "Error creating student"}), 500
+        return jsonify({"message": "An unexpected error occurred while creating the student"}), 500
 
 @app.route('/api/students/<int:student_db_id>', methods=['PUT'])
 @jwt_required()
@@ -2050,10 +2339,16 @@ def delete_student(current_user, student_id):
         return jsonify({"message": "Error deleting student"}), 500
 
 # --- Enroll Students in a Course ---
-
 @app.route('/api/courses/<int:course_id>/students', methods=['POST'])
 @role_required(['lecturer', 'admin'])
 def enroll_students(current_user, course_id):
+    """
+    Enrolls one or more students into a course.
+    - If a student ID does not exist, it creates both a new Student profile
+      and a corresponding User account.
+    - The new user's username and initial password will be their student ID.
+    - The new user's email will be a placeholder: <student_id>@example.com.
+    """
     course = db.session.query(Course).get(course_id)
     if not course:
         return jsonify({"message": "Course not found"}), 404
@@ -2068,85 +2363,110 @@ def enroll_students(current_user, course_id):
     if not isinstance(student_identifiers, list):
         return jsonify({"message": "'student_ids' must be a list of student ID strings"}), 400
 
-    # Sanitize the list to remove empty strings and duplicates
-    processed_identifiers = list(set([s_id.strip() for s_id in student_identifiers if isinstance(s_id, str) and s_id.strip()]))
+    processed_identifiers = list(set([s_id.strip() for s_id in student_identifiers if s_id and isinstance(s_id, str)]))
     
-    # Get all existing students matching the provided identifiers
     existing_students = db.session.query(Student).filter(Student.student_id.in_(processed_identifiers)).all()
     existing_student_map = {s.student_id: s for s in existing_students}
 
-    newly_created_students_count = 0
-    students_to_process = list(existing_students) # Start with the list of existing students
+    conflicting_users = db.session.query(User.username).filter(User.username.in_(processed_identifiers)).all()
+    conflicting_usernames = {u.username for u in conflicting_users}
 
-    # Identify which students need to be created
+    students_to_process = list(existing_students)
+    newly_created_student_count = 0
+    newly_enrolled_count = 0
+    already_enrolled_count = 0
+    errors = []
+
     for s_id in processed_identifiers:
         if s_id not in existing_student_map:
-            # This student does not exist, so create a new one
+            # This student needs to be created
+            if s_id in conflicting_usernames:
+                errors.append(f"Cannot create user for '{s_id}': username already exists.")
+                continue
+            
             try:
-                # Create the new student with a placeholder name
-                new_student = Student(student_id=s_id, name=f"Student {s_id}")
-                db.session.add(new_student)
+                placeholder_email = f"{s_id}@example.com"
+                if db.session.query(User).filter_by(email=placeholder_email).first():
+                    errors.append(f"Cannot create user for '{s_id}': placeholder email '{placeholder_email}' already exists.")
+                    continue
+
+                # --- Create User account ---
+                hashed_password = generate_password_hash(s_id, method='pbkdf2:sha256')
+                new_user = User(
+                    username=s_id,
+                    password=hashed_password,
+                    email=placeholder_email,
+                    role='student'
+                )
+                
+                # --- Create Student profile ---
+                new_student = Student(
+                    student_id=s_id,
+                    name=f"Student {s_id}",
+                    email=placeholder_email
+                )
+                
+                # --- THE FIX: Explicitly link the User to the Student profile ---
+                # This ensures the `user_id` foreign key is correctly populated on commit.
+                new_user.student_profile = new_student
+
+                # Add the user to the session. The linked student will be handled by the cascade.
+                db.session.add(new_user)
+                
                 students_to_process.append(new_student)
-                newly_created_students_count += 1
-            except IntegrityError:
-                # This can happen in a race condition or if the ID was just added.
-                db.session.rollback()
-                student = db.session.query(Student).filter_by(student_id=s_id).first()
-                if student:
-                    students_to_process.append(student) # Add the found student
-                else:
-                    # This case is unlikely but handled for safety.
-                    logger.error(f"Failed to create or find student {s_id} after IntegrityError.")
-                    continue # Skip this problematic ID
+                newly_created_student_count += 1
+                conflicting_usernames.add(s_id) # Avoid duplicates in the same batch
+
             except Exception as e:
                 db.session.rollback()
-                logger.error(f"Error creating student {s_id}: {str(e)}", exc_info=True)
-                continue # Skip this problematic ID
+                error_msg = f"Error creating student and user for ID '{s_id}': {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                errors.append(error_msg)
 
-    # Enroll all found or created students
-    enrolled_count = 0
-    already_enrolled_count = 0
-    # Use a set to ensure each student is processed for enrollment only once
-    unique_students_to_process = list(set(students_to_process))
-
-    for student in unique_students_to_process:
+    # Enroll all found or newly created students into the course
+    for student in students_to_process:
         if student not in course.students:
             course.students.append(student)
-            enrolled_count += 1
+            newly_enrolled_count += 1
         else:
             already_enrolled_count += 1
 
     try:
         db.session.commit()
-        
-        # Build a descriptive success message for the frontend
-        message_parts = []
-        if enrolled_count > 0:
-            message_parts.append(f"Successfully enrolled {enrolled_count} students.")
-        if newly_created_students_count > 0:
-            # This message assumes placeholder names were used.
-            message_parts.append(f"Created {newly_created_students_count} new student profiles. Please update their names.")
-        if already_enrolled_count > 0:
-            message_parts.append(f"{already_enrolled_count} students were already enrolled.")
-        
-        if not message_parts:
-            message = "No new students were enrolled or created."
-        else:
-            message = " ".join(message_parts)
-
-        logger.info(f"{enrolled_count} students enrolled, {newly_created_students_count} created in course {course_id} by {current_user.username}")
-        
-        return jsonify({
-            "message": message,
-            "newly_enrolled_count": enrolled_count,
-            "newly_created_count": newly_created_students_count,
-            "already_enrolled_count": already_enrolled_count
-        }), 200
-
     except Exception as e:
         db.session.rollback()
         logger.error(f"Error committing enrollments for course {course_id}: {str(e)}", exc_info=True)
-        return jsonify({"message": "An unexpected error occurred while enrolling students"}), 500
+        return jsonify({"message": "An unexpected error occurred during the final commit."}), 500
+
+    # Build response message
+    message_parts = []
+    if newly_enrolled_count > 0:
+        message_parts.append(f"Successfully enrolled {newly_enrolled_count} students.")
+    if newly_created_student_count > 0:
+        message_parts.append(f"Created {newly_created_student_count} new student and user accounts. Please update their details.")
+    if already_enrolled_count > 0:
+        # This count now correctly reflects only students who were already in the course beforehand
+        already_enrolled_count_final = already_enrolled_count - newly_created_student_count
+        if already_enrolled_count_final > 0:
+            message_parts.append(f"{already_enrolled_count_final} students were already in this course.")
+    
+    if not message_parts:
+        message = "No changes made. The students may have already been enrolled."
+    else:
+        message = " ".join(message_parts)
+
+    log_message = (f"{newly_enrolled_count} enrolled, {newly_created_student_count} created in course {course_id} by {current_user.username}. "
+                   f"Errors: {len(errors)}")
+    logger.info(log_message)
+    add_system_log('INFO', current_user.username, 'STUDENTS_ENROLLED', log_message)
+
+    return jsonify({
+        "message": message,
+        "newly_enrolled_count": newly_enrolled_count,
+        "newly_created_count": newly_created_student_count,
+        "already_enrolled_count": already_enrolled_count - newly_created_student_count,
+        "errors": errors
+    }), 200
 
 # --- Unenroll Students from a Course ---
 
@@ -2381,12 +2701,11 @@ def create_qr_code(current_user, session_id):
         session.expires_at = datetime.utcnow() + timedelta(minutes=duration_minutes)
         session.qr_code_uuid = str(uuid4())
 
-        # --- FIX: Construct the full URL for the QR code ---
-        # This URL points to your frontend's scanning page.
+        # --- FIX: Construct the full URL for the public attendance marking page ---
         frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
-        full_scan_url = f"{frontend_url}/student/scan-qr?session_id={session_id}&uuid={session.qr_code_uuid}"
+        full_scan_url = f"{frontend_url}/attendance/mark?session_id={session_id}&uuid={session.qr_code_uuid}"
         
-        # --- FIX: Generate the QR code from the full URL ---
+        # Generate the QR code from the full URL
         session.qr_code_data = generate_qr_code_data(full_scan_url)
 
         db.session.commit()
@@ -2452,6 +2771,27 @@ def get_qr_code_status(session_id):
             "message": "QR code is not currently active or has expired",
             "is_active": False
         }), 200
+
+@app.route('/api/sessions/<int:session_id>/details-public', methods=['GET'])
+def get_session_details_public(session_id):
+    """
+    Public endpoint to fetch basic, non-sensitive details for a session.
+    Used by the public attendance marking page.
+    """
+    session = db.session.query(Session).options(
+        joinedload(Session.course)
+    ).filter_by(id=session_id).first()
+    
+    if not session:
+        return jsonify({"message": "Session not found"}), 404
+
+    session_data = {
+        'course_name': session.course.name,
+        'session_date': str(session.session_date),
+        'start_time': session.start_time.strftime('%H:%M'),
+        'end_time': session.end_time.strftime('%H:%M'),
+    }
+    return jsonify(session_data), 200
 
 @app.route('/api/sessions/<int:session_id>/attendance', methods=['POST'])
 def mark_attendance(session_id):
@@ -2528,48 +2868,244 @@ def get_my_attendance():
         logger.warning(f"User {current_user.username} (ID: {current_user.id}) has role 'student' but no linked student profile.")
         return jsonify({"status": "error", "message": "No linked student profile found for this user."}), 404
 
-
     # Get optional course_id filter from query parameters
     course_id_filter = request.args.get('course_id', type=int)
 
     try:
-        # Query attendance records for the student, joining related tables
-        query = db.session.query(Attendance).filter_by(student_id=student.id)
+        # This single, comprehensive query is more efficient than the previous version.
+        # It joins all necessary tables upfront to avoid extra queries in a loop.
+        query = db.session.query(
+            Attendance,
+            Session,
+            Course,
+            User  # Represents the lecturer
+        ).select_from(Attendance).join(
+            Session, Attendance.session_id == Session.id
+        ).join(
+            Course, Session.course_id == Course.id
+        ).outerjoin(  # Use outerjoin for lecturer in case a course has no assigned lecturer
+            User, Course.lecturer_id == User.id
+        ).filter(
+            Attendance.student_id == student.id
+        )
 
-        # Apply course filter if provided
+        # Apply the optional course filter if provided
         if course_id_filter:
-            query = query.join(Attendance.session).filter(Session.course_id == course_id_filter)
+            query = query.filter(Course.id == course_id_filter)
 
-        # Join Session and Course to get session and course details
-        query = query.join(Attendance.session).join(Session.course)
-
-        # Order by session date and time
+        # Order by the most recent sessions first
         query = query.order_by(Session.session_date.desc(), Session.start_time.desc())
 
-        attendance_records = query.all()
+        # Execute the query to get all matching records
+        results = query.all()
 
-        # Format the data for the frontend
+        # Format the data into a list of dictionaries for the JSON response
         attendance_data = []
-        for record in attendance_records:
-            # Join with User table to get lecturer name from Course.lecturer_id
-            lecturer = db.session.query(User).get(record.session.course.lecturer_id) if record.session.course.lecturer_id else None
-            lecturer_name = lecturer.username if lecturer else 'N/A'
-
+        for attendance_record, session, course, lecturer in results:
             attendance_data.append({
-                'attendance_id': record.id,
-                'session_id': record.session_id,
-                'course_id': record.session.course.id,
-                'course_name': record.session.course.name,
-                'session_date': str(record.session.session_date),
-                'session_start_time': str(record.session.start_time),
-                'session_end_time': str(record.session.end_time),
-                'lecturer_name': lecturer_name,
-                'timestamp': record.timestamp.isoformat(),
-                'attendance_status': 'Present' # For this endpoint, all records mean 'Present'
+                'attendance_id': attendance_record.id,
+                'session_id': session.id,
+                'course_id': course.id,
+                'course_name': course.name,
+                'session_date': session.session_date.isoformat(),
+                'session_start_time': session.start_time.strftime('%H:%M'),
+                'session_end_time': session.end_time.strftime('%H:%M'),
+                'lecturer_name': lecturer.username if lecturer else 'N/A',
+                'timestamp': attendance_record.timestamp.isoformat(),
+                'attendance_status': attendance_record.status or 'Present'
             })
+        
+        return jsonify(attendance_data), 200
+
     except Exception as e:
         logger.error(f"Error retrieving attendance for student {student.id}: {str(e)}", exc_info=True)
         return jsonify({"status": "error", "message": "An error occurred while retrieving attendance records."}), 500
+
+@app.route('/api/my-engagement', methods=['GET'])
+@role_required(['student'])
+def get_my_engagement(current_user):
+    """
+    Calculates and returns the engagement score and tier for the logged-in student.
+    """
+    try:
+        # Find the linked student profile
+        student = db.session.query(Student).filter_by(user_id=current_user.id).first()
+        if not student:
+            logger.warning(f"User {current_user.username} has 'student' role but no linked profile.")
+            return jsonify({"status": "error", "message": "No linked student profile found."}), 404
+
+        # Query for all sessions of courses the student is enrolled in.
+        # This represents all the sessions they *should* have attended.
+        total_possible_sessions = db.session.query(func.count(Session.id)).join(Course).join(Course.students).filter(
+            Student.id == student.id
+        ).scalar() or 0
+
+        # Query for all the attendance records for this student.
+        # This represents all the sessions they *did* attend.
+        attended_sessions_count = db.session.query(func.count(Attendance.id)).filter(
+            Attendance.student_id == student.id
+        ).scalar() or 0
+        
+        # Calculate the attendance rate
+        if total_possible_sessions > 0:
+            rate = (attended_sessions_count / total_possible_sessions) * 100
+        else:
+            # If there are no sessions, they have a perfect (or undefined) rate. 100 is a good default.
+            rate = 100 
+
+        # Determine the engagement tier and a corresponding message
+        if rate >= 80:
+            tier = 'High'
+            tier_color = 'green'
+            message = "Excellent work! Your engagement is consistently high."
+        elif rate >= 50:
+            tier = 'Medium'
+            tier_color = 'yellow'
+            message = "Good effort! Keep attending to boost your engagement."
+        else:
+            tier = 'Low'
+            tier_color = 'red'
+            message = "Your engagement is low. Attending more sessions will help improve it."
+
+        return jsonify({
+            'engagement_score': round(rate),
+            'engagement_tier': tier,
+            'tier_color': tier_color,
+            'message': message,
+            'attended_sessions': attended_sessions_count,
+            'total_sessions': total_possible_sessions
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error calculating engagement for student {student.id}: {str(e)}", exc_info=True)
+        return jsonify({"status": "error", "message": "An error occurred while calculating engagement."}), 500
+
+@app.route('/api/my-upcoming-sessions', methods=['GET'])
+@role_required(['student'])
+def get_my_upcoming_sessions(current_user):
+    """
+    Fetches the next 3 upcoming sessions for the logged-in student.
+    """
+    try:
+        # Find the linked student profile
+        student = db.session.query(Student).filter_by(user_id=current_user.id).first()
+        if not student:
+            logger.warning(f"User {current_user.username} has 'student' role but no linked profile.")
+            return jsonify({"status": "error", "message": "No linked student profile found."}), 404
+
+        # Get current date and time for filtering
+        now = datetime.utcnow()
+        today = now.date()
+        current_time = now.time()
+
+        # Query for upcoming sessions for the courses the student is enrolled in
+        upcoming_sessions = db.session.query(Session).join(Course).join(Course.students).filter(
+            Student.id == student.id,
+            # Filter for sessions that are today and in the future, or are on a future date
+            db.or_(
+                Session.session_date > today,
+                db.and_(
+                    Session.session_date == today,
+                    Session.start_time > current_time
+                )
+            )
+        ).order_by(Session.session_date.asc(), Session.start_time.asc()).limit(3).all()
+
+        # Format the data for the response
+        sessions_data = []
+        for session in upcoming_sessions:
+            sessions_data.append({
+                'session_id': session.id,
+                'course_name': session.course.name,
+                'session_date': session.session_date.isoformat(),
+                'start_time': session.start_time.strftime('%H:%M'),
+                'topic': session.topic
+            })
+
+        return jsonify(sessions_data), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching upcoming sessions for student {student.id}: {str(e)}", exc_info=True)
+        return jsonify({"status": "error", "message": "An error occurred while fetching upcoming sessions."}), 500
+
+@app.route('/api/my-attendance-trends', methods=['GET'])
+@role_required(['student'])
+def get_my_attendance_trends(current_user):
+    """
+    Fetches attendance data for the last 90 days for the logged-in student,
+    formatted for a calendar heatmap and a weekly trend chart.
+    """
+    try:
+        # 1. Get the student profile
+        student = db.session.query(Student).filter_by(user_id=current_user.id).first()
+        if not student:
+            return jsonify({"status": "error", "message": "No linked student profile found."}), 404
+
+        # 2. Define the time range (last 90 days)
+        ninety_days_ago = datetime.utcnow().date() - timedelta(days=90)
+
+        # 3. Get all sessions the student was enrolled in within the time range
+        possible_sessions = db.session.query(
+            Session.id,
+            Session.session_date
+        ).join(Course).join(Course.students).filter(
+            Student.id == student.id,
+            Session.session_date >= ninety_days_ago
+        ).all()
+
+        # 4. Get all attendance records for the student within the time range
+        attended_sessions = db.session.query(
+            Attendance.session_id,
+            Session.session_date
+        ).join(Session).filter(
+            Attendance.student_id == student.id,
+            Session.session_date >= ninety_days_ago
+        ).all()
+        
+        # --- 5. Process data for Calendar Heatmap ---
+        from collections import Counter
+        heatmap_data_counter = Counter([s.session_date for s in attended_sessions])
+        heatmap_data = [
+            {"date": date.isoformat(), "count": count}
+            for date, count in heatmap_data_counter.items()
+        ]
+
+        # --- 6. Process data for Weekly Trend Chart ---
+        from collections import defaultdict
+        
+        # {week_key: {'possible': count, 'attended': count}}
+        weekly_data = defaultdict(lambda: {'possible': 0, 'attended': 0})
+        
+        # Populate possible sessions per week
+        for _, session_date in possible_sessions:
+            week_key = (session_date.isocalendar().year, session_date.isocalendar().week)
+            weekly_data[week_key]['possible'] += 1
+            
+        # Populate attended sessions per week
+        for _, session_date in attended_sessions:
+            week_key = (session_date.isocalendar().year, session_date.isocalendar().week)
+            weekly_data[week_key]['attended'] += 1
+            
+        # Format for chart
+        sorted_weeks = sorted(weekly_data.keys())
+        weekly_trend_data = []
+        for week_key in sorted_weeks:
+            year, week_num = week_key
+            data = weekly_data[week_key]
+            rate = (data['attended'] / data['possible']) * 100 if data['possible'] > 0 else 0
+            weekly_trend_data.append({
+                'week': f"W{week_num}",
+                'attendance': round(rate)
+            })
+
+        return jsonify({
+            "heatmap_data": heatmap_data,
+            "weekly_trend_data": weekly_trend_data
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error fetching attendance trends for student {student.id}: {str(e)}", exc_info=True)
+        return jsonify({"status": "error", "message": "An error occurred while fetching attendance trends."}), 500
 
 @app.route('/api/students/<int:student_id>/attendance', methods=['GET']) # Corrected indentation
 @jwt_required() # Add JWT requirement
@@ -2742,68 +3278,122 @@ def export_students(current_user):
 @app.route('/api/import-students', methods=['POST'])
 @role_required(['lecturer', 'admin'])
 def import_students(current_user):
-    """Allows lecturers and admins to import student data via CSV."""
+    """
+    Allows lecturers and admins to import student data.
+    - For new students, it creates both a Student profile and a linked User account.
+    - For existing students, it updates their name and email.
+    """
     data = request.get_json()
     if not data:
         return jsonify({"message": "No input data provided"}), 400
 
     imported_students = []
     updated_students = []
-    failed_students = []
+    failed_entries = []
+
+    # Get all existing students and users in bulk to avoid querying in a loop
+    all_students = db.session.query(Student).all()
+    all_users = db.session.query(User).options(db.joinedload(User.student_profile)).all()
+    
+    student_map_by_id = {s.student_id: s for s in all_students}
+    student_map_by_email = {s.email: s for s in all_students if s.email}
+    user_map_by_username = {u.username: u for u in all_users}
+    user_map_by_email = {u.email: u for u in all_users if u.email}
 
     for student_data in data:
         student_id = student_data.get('student_id', '').strip()
         name = student_data.get('name', '').strip()
         email = student_data.get('email', '').strip()
 
-        # Validation
-        if not student_id or not name:
-            failed_students.append({"data": student_data, "error": "Student ID and name are required"})
+        # --- Validation ---
+        if not student_id or not name or not email:
+            failed_entries.append({"data": student_data, "error": "Student ID, name, and email are required."})
             continue
-        if email and not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
-            failed_students.append({"data": student_data, "error": "Invalid email format"})
+        if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email):
+            failed_entries.append({"data": student_data, "error": "Invalid email format."})
             continue
 
         try:
-            # Check if student exists by student_id or email
-            existing_student = db.session.query(Student).filter(
-                (Student.student_id == student_id) | (Student.email == email if email else False)
-            ).first()
+            # --- Check if Student Exists ---
+            existing_student = student_map_by_id.get(student_id) or student_map_by_email.get(email)
 
             if existing_student:
-                # Check for conflicts (e.g., different student_id with same email)
-                if existing_student.student_id != student_id and (email and existing_student.email == email):
-                     failed_students.append({"data": student_data, "error": f"Conflict: Email '{email}' is already associated with Student ID '{existing_student.student_id}'"})
-                     continue # Don't process this student further if there's a conflict
+                # --- Update Existing Student ---
+                if existing_student.student_id != student_id and existing_student.email == email:
+                    failed_entries.append({"data": student_data, "error": f"Conflict: Email '{email}' is already used by student ID '{existing_student.student_id}'."})
+                    continue
                 
-                # Update existing student
-                if name and existing_student.name != name:
-                    existing_student.name = name
-                if email and existing_student.email != email:
-                     # Ensure the email isn't already taken by another student with a different ID
-                    if db.session.query(Student).filter(Student.email == email, Student.id != existing_student.id).first():
-                         failed_students.append({"data": student_data, "error": f"Email '{email}' is already taken by another student."})
-                         continue
+                existing_student.name = name
+                
+                # Also update the student and linked user's email if it's different
+                if existing_student.email != email:
+                    if email in user_map_by_email and user_map_by_email[email].username != existing_student.student_id:
+                        failed_entries.append({"data": student_data, "error": f"Conflict: Cannot update email to '{email}' as it's already in use by another user."})
+                        continue
                     existing_student.email = email
+                    if existing_student.user_account:
+                        existing_student.user_account.email = email
+
                 updated_students.append(student_data)
             else:
-                # Create new student
-                new_student = Student(student_id=student_id, name=name, email=email)
+                # --- Create New Student and User ---
+                if student_id in user_map_by_username:
+                    failed_entries.append({"data": student_data, "error": f"Cannot create user: username '{student_id}' already exists."})
+                    continue
+                if email in user_map_by_email:
+                    failed_entries.append({"data": student_data, "error": f"Cannot create user: email '{email}' already exists."})
+                    continue
+
+                # Create new User
+                hashed_password = generate_password_hash(student_id, method='pbkdf2:sha256')
+                new_user = User(
+                    username=student_id,
+                    password=hashed_password,
+                    email=email,
+                    role='student'
+                )
+                
+                # Create new Student
+                new_student = Student(
+                    student_id=student_id,
+                    name=name,
+                    email=email
+                )
+
+                # THE FIX: Explicitly link the two objects via the defined relationship
+                new_user.student_profile = new_student
+
+                db.session.add(new_user)
                 db.session.add(new_student)
                 imported_students.append(student_data)
+                
+                # Add to maps to prevent duplicate creation in the same batch run
+                user_map_by_username[student_id] = new_user
+                user_map_by_email[email] = new_user
 
         except Exception as e:
             db.session.rollback()
-            failed_students.append({"data": student_data, "error": f"Database error: {str(e)}"})
-            logger.error(f"Error processing student {student_id}: {str(e)}", exc_info=True)
+            failed_entries.append({"data": student_data, "error": f"An unexpected database error occurred: {str(e)}"})
+            logger.error(f"Error processing student import for {student_id}: {str(e)}", exc_info=True)
 
-    db.session.commit()
+    try:
+        db.session.commit()
+        log_message = (f"Import by {current_user.username}: "
+                       f"{len(imported_students)} created, {len(updated_students)} updated, {len(failed_entries)} failed.")
+        add_system_log('INFO', current_user.username, 'STUDENT_IMPORT', log_message)
+        logger.info(log_message)
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Fatal error during final commit of student import: {str(e)}", exc_info=True)
+        return jsonify({"message": "A fatal error occurred during the final save. The import was aborted."}), 500
+
     return jsonify({
-        "message": "Student import process completed",
+        "message": "Student import process completed.",
         "imported_count": len(imported_students),
         "updated_count": len(updated_students),
-        "failed_count": len(failed_students),
-        "failed_students": failed_students
+        "failed_count": len(failed_entries),
+        "failed_entries": failed_entries
     }), 200
 
 # --- Session Management (Update and Delete) ---
@@ -2981,11 +3571,16 @@ def create_impromptu_session(current_user, course_id):
             qr_code_uuid=str(uuid4())
         )
 
+        # Add the session to the transaction and flush to assign it an ID
+        db.session.add(impromptu_session)
+        db.session.flush()
+
         frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
-        full_scan_url = f"{frontend_url}/student/scan-qr?session_id={impromptu_session.id}&uuid={impromptu_session.qr_code_uuid}"
+        # --- FIX: Use the correct public URL and the newly generated session ID ---
+        full_scan_url = f"{frontend_url}/attendance/mark?session_id={impromptu_session.id}&uuid={impromptu_session.qr_code_uuid}"
         impromptu_session.qr_code_data = generate_qr_code_data(full_scan_url)
 
-        db.session.add(impromptu_session)
+        # Commit the transaction with the QR code data included
         db.session.commit()
         
         logger.info(f"Impromptu session {impromptu_session.id} created for course {course_id} by {current_user.username}")

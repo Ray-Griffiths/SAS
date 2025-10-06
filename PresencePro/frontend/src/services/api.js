@@ -1,6 +1,6 @@
+
 import axios from 'axios';
 
-// --- FIX: Removed baseURL to make all paths explicit ---
 const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
@@ -18,8 +18,6 @@ api.interceptors.request.use(
   },
   (error) => Promise.reject(error)
 );
-
-// --- FIX: Added explicit /api to all paths ---
 
 export const login = async (identifier, password) => {
   const response = await api.post('/api/login', { identifier, password });
@@ -54,8 +52,27 @@ export const updateMyProfile = async (profileData) => {
   return response.data;
 };
 
-export const getUsers = async (page = 1, per_page = 20) => {
-  const response = await api.get(`/api/users?page=${page}&per_page=${per_page}`);
+export const updateMyProfilePicture = async (formData) => {
+  const response = await api.post('/api/my-profile/picture', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data;
+};
+
+export const getUsers = async (page = 1, per_page = 10, searchTerm = '', role = '') => {
+  const params = new URLSearchParams({
+    page,
+    per_page,
+  });
+  if (searchTerm) {
+    params.append('search', searchTerm);
+  }
+  if (role) {
+    params.append('role', role);
+  }
+  const response = await api.get(`/api/users?${params.toString()}`);
   return response.data;
 };
 
@@ -227,8 +244,28 @@ export const getStudentAttendance = async (studentDbId, courseId = null) => {
   return response.data;
 };
 
+export const getMyAttendance = async () => {
+    const response = await api.get('/api/my-attendance');
+    return response.data;
+};
+
+export const getMyEngagement = async () => {
+  const response = await api.get('/api/my-engagement');
+  return response.data;
+};
+
+export const getMyUpcomingSessions = async () => {
+  const response = await api.get('/api/my-upcoming-sessions');
+  return response.data;
+};
+
+export const getMyAttendanceTrends = async () => {
+  const response = await api.get('/api/my-attendance-trends');
+  return response.data;
+};
+
 export const getCourseAttendanceSummary = async (courseId) => {
-  const response = await api.get(`/api/courses/${courseId}/attendance_summary`);
+  const response = await api.get(`/api/courses/${courseId}/attendance/summary`);
   return response.data;
 };
 

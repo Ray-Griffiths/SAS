@@ -17,7 +17,6 @@ const CrossCourseComparisonReport = () => {
       setLoading(true);
       setError('');
       try {
-        // This endpoint already exists and provides the data we need.
         const response = await api.get('/api/lecturer/dashboard-charts');
         const data = response.data.courseAttendance;
 
@@ -50,8 +49,11 @@ const CrossCourseComparisonReport = () => {
     fetchChartData();
   }, []);
 
+  // --- RESPONSIVE CHART OPTIONS ---
   const options = {
+    indexAxis: 'y', // Make chart horizontal
     responsive: true,
+    maintainAspectRatio: false, // Allow chart to fill container height
     plugins: {
       legend: {
         position: 'top',
@@ -70,8 +72,9 @@ const CrossCourseComparisonReport = () => {
                     if (label) {
                         label += ': ';
                     }
-                    if (context.parsed.y !== null) {
-                        label += context.parsed.y + '%';
+                    // Value is now on the X-axis
+                    if (context.parsed.x !== null) {
+                        label += context.parsed.x + '%';
                     }
                     return label;
                 }
@@ -79,7 +82,8 @@ const CrossCourseComparisonReport = () => {
         }
     },
     scales: {
-      y: {
+      // X-axis is now the value axis (Percentage)
+      x: {
         beginAtZero: true,
         max: 100,
         title: {
@@ -87,9 +91,10 @@ const CrossCourseComparisonReport = () => {
             text: 'Average Attendance (%)'
         }
       },
-      x: {
+      // Y-axis is now the category axis (Courses)
+      y: {
           title: {
-              display: true,
+              display: false, // Hide Y-axis title to save space
               text: 'Courses'
           }
       }
@@ -114,7 +119,8 @@ const CrossCourseComparisonReport = () => {
   }
 
   return (
-    <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg">
+    // FIX: Container needs a defined height for responsive chart to work
+    <div className="bg-white p-4 md:p-6 rounded-xl shadow-lg h-[500px]">
       <Bar options={options} data={chartData} />
     </div>
   );

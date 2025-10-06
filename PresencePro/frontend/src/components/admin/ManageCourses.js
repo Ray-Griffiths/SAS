@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { api, getLecturers } from '../../services/api'; // Combined imports
 import { 
     PencilIcon, TrashIcon, PlusCircleIcon, MagnifyingGlassIcon, 
-    ExclamationTriangleIcon, XCircleIcon, BookOpenIcon 
+    ExclamationTriangleIcon, XCircleIcon
 } from '@heroicons/react/24/solid';
 
 // Reusable Modal Component

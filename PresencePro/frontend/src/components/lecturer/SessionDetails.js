@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import GenerateQRCodeModal from './GenerateQRCode';
@@ -15,7 +15,7 @@ const SessionDetails = () => {
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       const [sessionRes, attendanceRes] = await Promise.all([
@@ -29,11 +29,11 @@ const SessionDetails = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [courseId, sessionId]);
 
   useEffect(() => {
     fetchData();
-  }, [sessionId]);
+  }, [fetchData]);
 
   const handleUpdateSuccess = () => {
     setIsEditModalOpen(false);

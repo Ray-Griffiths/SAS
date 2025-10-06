@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { FaQrcode, FaChartLine, FaUsers, FaShieldAlt, FaUniversity, FaSchool, FaBuilding, FaChalkboardTeacher, FaUserGraduate } from 'react-icons/fa';
+import { FaQrcode, FaChartLine, FaUsers, FaUniversity, FaSchool, FaBuilding, FaChalkboardTeacher } from 'react-icons/fa';
 
 const FeatureCard = ({ icon, title, text }) => (
   <div className="bg-white rounded-lg shadow-lg p-6 flex flex-col items-center text-center transform hover:scale-105 transition-transform duration-300">

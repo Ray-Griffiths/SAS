@@ -1,65 +1,51 @@
-
-import React, { useState } from 'react';
+import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { 
-  HomeIcon, 
-  UsersIcon, 
-  BookOpenIcon, 
-  ClipboardDocumentListIcon, 
-  Cog6ToothIcon,
-  ChevronLeftIcon, 
-  ChevronRightIcon 
-} from '@heroicons/react/24/solid';
+import { useAuth } from '../../context/AuthContext'; // 1. Import useAuth
 
-const menuItems = [
-  { path: '/admin', name: 'Dashboard', icon: <HomeIcon className="h-6 w-6" /> },
-  { path: '/admin/users', name: 'Users', icon: <UsersIcon className="h-6 w-6" /> },
-  { path: '/admin/courses', name: 'Courses', icon: <BookOpenIcon className="h-6 w-6" /> },
-  { path: '/admin/system-logs', name: 'System Logs', icon: <ClipboardDocumentListIcon className="h-6 w-6" /> },
-  { path: '/admin/settings', name: 'Settings', icon: <Cog6ToothIcon className="h-6 w-6" /> },
+// 2. Define the navigation links in the new format
+const adminNavLinks = [
+  { to: '/admin', label: 'Dashboard' },
+  { to: '/admin/users', label: 'Users' },
+  { to: '/admin/courses', label: 'Courses' },
+  { to: '/admin/system-logs', label: 'System Logs' },
+  { to: '/admin/settings', label: 'Settings' },
 ];
 
 const AdminMenu = () => {
-  const [isOpen, setIsOpen] = useState(true);
+  const { user, logout } = useAuth(); // 3. Get user and logout function
 
-  const activeLinkStyle = {
-    backgroundColor: '#312E81', // A darker indigo
-    color: '#6EE7B7', // Teal accent for active link text
-    fontWeight: 'bold',
+  // 4. Define the link styling to match the blue theme
+  const getLinkClass = ({ isActive }) => {
+    return isActive
+      ? 'block py-2.5 px-4 rounded transition duration-200 bg-blue-700 text-white'
+      : 'block py-2.5 px-4 rounded transition duration-200 text-blue-100 hover:bg-blue-700 hover:text-white';
   };
 
   return (
-    <div className={`bg-indigo-900 text-gray-200 flex flex-col transition-all duration-300 ease-in-out ${isOpen ? 'w-64' : 'w-20'}`}>
-        {/* Toggle Button */}
-        <div className="p-4 flex justify-end">
-            <button onClick={() => setIsOpen(!isOpen)} className="p-2 rounded-full hover:bg-indigo-800 focus:outline-none">
-                {isOpen ? <ChevronLeftIcon className="h-6 w-6 text-white" /> : <ChevronRightIcon className="h-6 w-6 text-white" />}
-            </button>
-        </div>
-
-      {/* Title */}
-      <div className="px-4 pb-4 border-b border-indigo-800">
-          <h2 className={`text-2xl font-bold text-white transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 h-0'}`}>Admin Menu</h2>
+    // 5. Use the same blue-themed layout as the other portals
+    <div className="w-64 bg-blue-800 text-white flex flex-col h-screen">
+      <div className="px-6 py-4 border-b border-blue-700">
+        <h2 className="text-2xl font-bold">Admin Portal</h2>
+        {user && <span className='text-sm text-blue-200'>Welcome, {user.username}</span>}
       </div>
-
-      {/* Navigation */}
-      <nav className="flex-grow mt-4">
+      <nav className="flex-grow p-4">
         <ul className="space-y-2">
-          {menuItems.map((item) => (
-            <li key={item.name} className="px-4">
-              <NavLink
-                to={item.path}
-                end={item.path === '/admin'} // Add this to ensure only the exact path is active
-                style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
-                className="flex items-center p-2 rounded-lg hover:bg-indigo-800 transition-colors duration-200"
-              >
-                <span className="shrink-0">{item.icon}</span>
-                <span className={`ml-3 transition-opacity duration-200 ${isOpen ? 'opacity-100' : 'opacity-0'}`}>{item.name}</span>
+          {adminNavLinks.map((link, index) => (
+            <li key={index}>
+              <NavLink to={link.to} className={getLinkClass} end={link.to === '/admin'}>
+                {link.label}
               </NavLink>
             </li>
           ))}
         </ul>
       </nav>
+      <div className="p-4 border-t border-blue-700">
+        <button
+          onClick={logout}
+          className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition duration-300">
+          Logout
+        </button>
+      </div>
     </div>
   );
 };

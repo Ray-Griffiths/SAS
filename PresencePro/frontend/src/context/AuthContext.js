@@ -11,7 +11,7 @@ export const AuthProvider = ({ children }) => {
   const navigate = useNavigate();
 
   const loadUserFromToken = async () => {
-    const token = localStorage.getItem('access_token'); // FIX: Use 'access_token'
+    const token = localStorage.getItem('access_token');
     if (token) {
       try {
         const userProfile = await fetchUserProfile();
@@ -19,7 +19,7 @@ export const AuthProvider = ({ children }) => {
         setUser(fullUser);
       } catch (error) {
         console.error("Session expired or token invalid:", error);
-        localStorage.removeItem('access_token'); // FIX: Use 'access_token'
+        localStorage.removeItem('access_token');
         setUser(null);
       }
     }
@@ -31,11 +31,10 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   const login = async (identifier, password) => {
-    setLoading(true);
     try {
       const userData = await apiLogin(identifier, password);
       const token = userData.access_token;
-      localStorage.setItem('access_token', token); // FIX: Use 'access_token'
+      localStorage.setItem('access_token', token);
 
       const userProfile = await fetchUserProfile();
       const userWithRoles = userProfile.profile;
@@ -43,28 +42,29 @@ export const AuthProvider = ({ children }) => {
       const fullUser = { ...userWithRoles, token };
       setUser(fullUser);
 
-      if (fullUser.is_admin) {
-        navigate('/admin', { replace: true });
-      } else if (fullUser.is_lecturer) {
-        navigate('/lecturer', { replace: true });
-      } else if (fullUser.is_student) {
-        navigate('/student', { replace: true });
-      } else {
-        navigate('/', { replace: true }); // Default fallback
-      }
-
-      setLoading(false);
+      // Delay navigation to allow login page to show success message
+      setTimeout(() => {
+        if (fullUser.is_admin) {
+          navigate('/admin', { replace: true });
+        } else if (fullUser.is_lecturer) {
+          navigate('/lecturer', { replace: true });
+        } else if (fullUser.is_student) {
+          navigate('/student', { replace: true });
+        } else {
+          navigate('/', { replace: true });
+        }
+      }, 1000); // 1-second delay
 
     } catch (error) {
-      localStorage.removeItem('access_token'); // FIX: Use 'access_token'
+      localStorage.removeItem('access_token');
       setUser(null);
-      setLoading(false);
-      throw error; // Re-throw error for the form to catch
+      // No need to set loading state here, re-throw for the form to handle
+      throw error;
     }
   };
 
   const logout = () => {
-    localStorage.removeItem('access_token'); // FIX: Use 'access_token'
+    localStorage.removeItem('access_token');
     setUser(null);
     navigate('/login', { replace: true });
   };
@@ -80,6 +80,7 @@ export const AuthProvider = ({ children }) => {
 
   return (
     <AuthContext.Provider value={authValue}>
+      {/* Global loader for initial session check, not for login action */}
       {!loading && children}
     </AuthContext.Provider>
   );

@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api';
 
 const ScanQrCode = () => {
     const [searchParams] = useSearchParams();
-    const navigate = useNavigate();
     const [studentId, setStudentId] = useState('');
     const [message, setMessage] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
@@ -103,7 +102,7 @@ const ScanQrCode = () => {
                     </div>
                 )}
 
-                {!sessionId || !qrCodeUuid && (
+                {(!sessionId || !qrCodeUuid) && (
                      <div className="p-4 text-center text-yellow-800 bg-yellow-100 border border-yellow-400 rounded-md">
                         Waiting for valid session information from QR code...
                     </div>

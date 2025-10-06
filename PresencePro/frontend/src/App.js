@@ -1,20 +1,20 @@
 
 import React from 'react';
-import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 
 import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './components/Login';
+import Register from './components/Register'; // Import the new component
 import Homepage from './components/Homepage';
 import Navbar from './components/Navbar';
 import AdminPortal from './components/AdminPortal';
-import ContactForm from './components/ContactForm'; // Import the ContactForm
-
-// ... [rest of the imports] ...
+import LecturerPortal from './components/LecturerPortal';
+import ContactForm from './components/ContactForm';
+import MarkAttendancePage from './components/MarkAttendancePage';
 
 // Layouts & Menus
-import StudentDashboard from './components/student/StudentDashboard';
-import LecturerMenu from './components/lecturer/LecturerMenu';
+import StudentLayout from './components/layout/StudentLayout';
 
 // Admin Components
 import AdminDashboard from './components/admin/AdminDashboard';
@@ -37,19 +37,10 @@ import StudentDirectory from './pages/lecturer/StudentDirectory';
 import Reports from './pages/lecturer/Reports';
 
 // Student Components
+import StudentDashboard from './components/student/StudentDashboard';
 import ScanQrCode from './components/student/ScanQrCode';
 import ViewMyAttendance from './components/student/ViewMyAttendance';
 import UpdateProfile from './components/student/UpdateProfile';
-
-// New Layout for the Lecturer section
-const LecturerLayout = () => (
-  <div className="flex h-screen bg-gray-100">
-    <LecturerMenu />
-    <main className="flex-grow p-8 overflow-auto">
-      <Outlet />
-    </main>
-  </div>
-);
 
 function App() {
   return (
@@ -58,7 +49,9 @@ function App() {
       <Routes>
         <Route path="/" element={<Homepage />} />
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/contact" element={<ContactForm />} /> {/* Add the contact route */}
+        <Route path="/register" element={<Register />} />
+        <Route path="/contact" element={<ContactForm />} />
+        <Route path="/attendance/mark" element={<MarkAttendancePage />} />
 
         {/* Admin Routes */}
         <Route 
@@ -74,10 +67,10 @@ function App() {
           <Route path="settings" element={<Settings />} />
         </Route>
 
-        {/* --- UPDATED LECTURER ROUTES --- */}
+        {/* --- CORRECTED LECTURER ROUTES --- */}
         <Route 
           path="/lecturer" 
-          element={<ProtectedRoute roles={['lecturer', 'admin']}><LecturerLayout /></ProtectedRoute>}
+          element={<ProtectedRoute roles={['lecturer', 'admin']}><LecturerPortal /></ProtectedRoute>}
         >
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<LecturerDashboard />} />
@@ -91,17 +84,16 @@ function App() {
           <Route path="profile" element={<LecturerProfile />} />
         </Route>
 
-        {/* --- FIX: Public Route for QR Code Scanning --- */}
-        <Route path="/student/scan-qr" element={<ScanQrCode />} />
-
-        {/* --- FIX: Protected Student Routes --- */}
+        {/* --- STUDENT ROUTES --- */}
         <Route 
           path="/student" 
-          element={<ProtectedRoute roles={['student']}><StudentDashboard /></ProtectedRoute>}
+          element={<ProtectedRoute roles={['student']}><StudentLayout /></ProtectedRoute>}
         >
-          <Route index element={<Navigate to="my-attendance" replace />} />
+          <Route index element={<Navigate to="dashboard" replace />} />
+          <Route path="dashboard" element={<StudentDashboard />} />
           <Route path="my-attendance" element={<ViewMyAttendance />} />
-          <Route path="profile" element={<UpdateProfile />} />
+          <Route path="scan-qr" element={<ScanQrCode />} />
+          <Route path="update-profile" element={<UpdateProfile />} />
         </Route>
 
         {/* Default Route */}

@@ -22,7 +22,9 @@ class User(db.Model):
     email = Column(String(120), nullable=True)
     is_admin = Column(Boolean, default=False)
     
-    student_profile = relationship('Student', uselist=False, backref='user_account')
+    profile_picture_url = db.Column(db.String(255), nullable=True)
+
+    student_profile = relationship('Student', uselist=False, backref='user_account', cascade="all, delete-orphan")
     courses_taught = relationship('Course', backref='lecturer_user')
     
     __table_args__ = (
