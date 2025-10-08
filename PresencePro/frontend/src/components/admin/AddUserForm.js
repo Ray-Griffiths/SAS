@@ -15,7 +15,7 @@ const AddUserForm = ({ onSuccess, onCancel }) => {
   const validate = () => {
     const errors = {};
     if (username.length < 3) errors.username = 'Username must be at least 3 characters.';
-    if (!/^[\w\.-]+@[\w\.-]+\.\w+$/.test(email)) errors.email = 'Invalid email format.';
+    if (!/^[\w.-]+@[\w.-]+\.\w+$/.test(email)) errors.email = 'Invalid email format.';
     if (password.length < 8) errors.password = 'Password must be at least 8 characters.';
     // --- FIX: Add validation for student ID if the role is student ---
     if (role === 'student' && !studentId.trim()) {

@@ -34,24 +34,25 @@ def allowed_file(filename):
 
 # --- Manual .env loader ---
 # This block loads the JWT_SECRET_KEY from the .env file without needing external libraries.
-try:
-    env_path = os.path.join(os.path.dirname(__file__), '.env')
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#'):
-                    match = re.match(r'^\s*([\w.-]+)\s*=\s*(.*)?\s*$', line)
-                    if match:
-                        key, value = match.groups()
-                        if value:
+
+#try:
+#    env_path = os.path.join(os.path.dirname(__file__), '.env')
+#    if os.path.exists(env_path):
+#        with open(env_path) as f:
+#            for line in f:
+#                line = line.strip()
+#                if line and not line.startswith('#'):
+#                    match = re.match(r'^\s*([\w.-]+)\s*=\s*(.*)?\s*$', line)
+#                    if match:
+#                        key, value = match.groups()
+#                        if value:
                             # Remove surrounding single or double quotes
-                            value = value.strip('\'"')
-                        os.environ.setdefault(key, value)
-except Exception:
+#                            value = value.strip('\'"')
+#                        os.environ.setdefault(key, value)
+#except Exception:
     # If there's any issue, we'll fall back to the app's default key generation.
     # It's better to log this in a real app, but for now, we'll pass silently.
-    pass
+#    pass
 # --- End of manual loader ---
 
 # Add parent directory to sys.path for absolute imports
@@ -98,21 +99,31 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
+
+#class Config:
+#    SQLALCHEMY_TRACK_MODIFICATIONS = False
+#    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", str(uuid4()))
+#    SQLALCHEMY_DATABASE_URI = os.environ.get(
+#        "DATABASE_URL",
+#        f"sqlite:///{os.path.join(BASE_DIR, '..', 'db', 'presencepro.db')}"
+#    )
+#    JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
+
 class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", str(uuid4()))
-    SQLALCHEMY_DATABASE_URI = os.environ.get(
-        "DATABASE_URL",
-        f"sqlite:///{os.path.join(BASE_DIR, '..', 'db', 'presencepro.db')}"
-    )
+    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
 
 print("Flask app created")
 # Configure Flask to serve static files from the 'build' directory
 app.config.from_object(Config)
+
 # --- FIX: Initialize CORS ---
 # This will allow the frontend to make requests to the backend.
-CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": "*"}})
+#CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": "*"}})
+CORS(app, supports_credentials=True, resources={r"/api/*": {"origins": os.environ.get("FRONTEND_URL")}})
+
 print(f"App debug mode: {app.debug}")
 if app.config["JWT_SECRET_KEY"] == str(uuid4()):
     logger.warning("Using randomly generated JWT_SECRET_KEY. Set JWT_SECRET_KEY in environment for production.")
@@ -125,35 +136,83 @@ jwt = JWTManager(app)
 print("Flask extensions initialized")
 
 # --- Database Initialization Command ---
+#@app.cli.command("init-db")
+#def init_db_command():
+#    """Clears existing data and creates new tables and the default admin user."""
+#    db.create_all()
+#    logger.info("Database tables created.")
+    
+#    # Check if the admin user already exists
+#    admin_user = db.session.query(User).filter_by(username='admin').first()
+#    if not admin_user:
+#        admin_password = os.environ.get("ADMIN_PASSWORD", "AdminPass123!")
+#        new_admin = User(
+#            username="admin",
+#            email="admin@example.com",
+#            password=generate_password_hash(admin_password, method='pbkdf2:sha256'),
+#            is_admin=True,
+#            role="admin"
+#        )
+#        db.session.add(new_admin)
+#        db.session.commit()
+#        logger.info("Default admin user created.")
+#        if admin_password == "AdminPass123!":
+#            logger.warning("Using default admin password. Please change it immediately.")
+#    else:
+#        logger.info("Admin user already exists.")
+
+#    # Check for and create default application settings
+#    default_settings = {
+#        'session_timeout': {'value': '60', 'description': 'The idle time in minutes before a user is automatically logged out.'},
+#        'password_policy': {'value': '{"min_length": 8, "require_special": true, "require_number": true}', 'description': 'JSON-encoded password complexity rules.'},
+#        'qr_code_expiration': {'value': '60', 'description': 'How long a QR code remains valid for scanning (in seconds).'},
+#        'late_grace_period': {'value': '5', 'description': 'Grace period in minutes after a session starts where students can still be marked "Present".'},
+#        'application_timezone': {'value': 'UTC', 'description': 'The default application timezone.'}
+#    }
+
+#    for key, data in default_settings.items():
+#        if not db.session.query(Setting).filter_by(key=key).first():
+#            new_setting = Setting(key=key, value=data['value'], description=data['description'])
+#            db.session.add(new_setting)
+#            logger.info(f"Creating default setting: {key}")
+
+#    db.session.commit()
+#    logger.info("Default application settings checked/created.")
+    
+#    print("Database initialized.")
+
 @app.cli.command("init-db")
 def init_db_command():
-    """Clears existing data and creates new tables and the default admin user."""
+    """Clears existing data and creates new tables. It always resets the admin user."""
     db.create_all()
     logger.info("Database tables created.")
-    
-    # Check if the admin user already exists
+
+    # Find and delete the existing admin user to ensure a clean slate for the password.
     admin_user = db.session.query(User).filter_by(username='admin').first()
-    if not admin_user:
-        admin_password = os.environ.get("ADMIN_PASSWORD", "AdminPass123!")
-        new_admin = User(
-            username="admin",
-            email="admin@example.com",
-            password=generate_password_hash(admin_password, method='pbkdf2:sha256'),
-            is_admin=True,
-            role="admin"
-        )
-        db.session.add(new_admin)
+    if admin_user:
+        logger.info("Existing admin user found. Deleting to reset password.")
+        db.session.delete(admin_user)
         db.session.commit()
-        logger.info("Default admin user created.")
-        if admin_password == "AdminPass123!":
-            logger.warning("Using default admin password. Please change it immediately.")
-    else:
-        logger.info("Admin user already exists.")
+
+    # Create the default admin user with the password from the environment.
+    admin_password = os.environ.get("ADMIN_PASSWORD", "AdminPass123!")
+    new_admin = User(
+        username="admin",
+        email="admin@example.com",
+        password=generate_password_hash(admin_password, method='pbkdf2:sha256'),
+        is_admin=True,
+        role="admin"
+    )
+    db.session.add(new_admin)
+    db.session.commit()
+    logger.info("Default admin user has been created/reset successfully.")
+    if admin_password == "AdminPass123!":
+        logger.warning("Using default admin password. Please change it immediately.")
 
     # Check for and create default application settings
     default_settings = {
         'session_timeout': {'value': '60', 'description': 'The idle time in minutes before a user is automatically logged out.'},
-        'password_policy': {'value': '{"min_length": 8, "require_special": true, "require_number": true}', 'description': 'JSON-encoded password complexity rules.'},
+        'password_policy': {'value': '{\"min_length\": 8, \"require_special\": true, \"require_number\": true}', 'description': 'JSON-encoded password complexity rules.'},
         'qr_code_expiration': {'value': '60', 'description': 'How long a QR code remains valid for scanning (in seconds).'},
         'late_grace_period': {'value': '5', 'description': 'Grace period in minutes after a session starts where students can still be marked "Present".'},
         'application_timezone': {'value': 'UTC', 'description': 'The default application timezone.'}
@@ -167,8 +226,9 @@ def init_db_command():
 
     db.session.commit()
     logger.info("Default application settings checked/created.")
-    
+
     print("Database initialized.")
+
 
 # Deferred imports for utilities
 def get_attendance_utils():
@@ -1155,21 +1215,27 @@ def get_student_engagement_report(current_user):
 @role_required(['lecturer', 'admin'])
 def get_attendance_trends(current_user):
     """
-    Calculates the average attendance rate per week across all of a lecturer's courses.
+    Calculates the average attendance rate per week.
+    - For Lecturers, it's across all of their assigned courses.
+    - For Admins, it's across ALL courses in the system.
     """
     try:
         from collections import defaultdict
 
-        # Step 1: Get all sessions for the lecturer, ordered by date.
-        # Eagerly load courses and student enrollments to prevent N+1 queries.
-        sessions = db.session.query(Session).join(Course).options(
+        # The query now adapts based on the user's role.
+        query = db.session.query(Session).join(Course).options(
             joinedload(Session.course).joinedload(Course.students)
-        ).filter(Course.lecturer_id == current_user.id).order_by(Session.session_date).all()
+        )
+
+        # If the user is a lecturer (and not an admin), filter by their ID.
+        if not current_user.is_admin and current_user.role == 'lecturer':
+            query = query.filter(Course.lecturer_id == current_user.id)
+        
+        sessions = query.order_by(Session.session_date).all()
 
         if not sessions:
             return jsonify({'labels': [], 'values': []})
 
-        # Step 2: Get all attendance records for these sessions in a single query.
         session_ids = [s.id for s in sessions]
         attendance_counts = db.session.query(
             Attendance.session_id,
@@ -1177,25 +1243,19 @@ def get_attendance_trends(current_user):
         ).filter(
             Attendance.session_id.in_(session_ids)
         ).group_by(Attendance.session_id).all()
-        # Create a map for quick lookup: {session_id: count}
         attendance_map = dict(attendance_counts)
 
-        # Step 3: Process sessions week by week.
-        # Use a dictionary to aggregate data per week. Key: (year, week_number)
         weekly_data = defaultdict(lambda: {'possible': 0, 'attended': 0})
         
         for s in sessions:
-            # Use ISO calendar to get year and week number for grouping.
-            week_key = (s.session_date.isocalendar().year, s.session_date.isocalendar().week)
-            
-            # Add to the total possible attendance for that week.
+            # --- THIS IS THE FIX ---
+            # Use tuple slicing on isocalendar() to robustly get year and week
+            iso_calendar = s.session_date.isocalendar()
+            week_key = (iso_calendar[0], iso_calendar[1]) # Creates a (year, week_number) tuple
+            # --- END OF FIX ---
             weekly_data[week_key]['possible'] += len(s.course.students)
-            
-            # Add the actual attendance count from our pre-fetched map.
             weekly_data[week_key]['attended'] += attendance_map.get(s.id, 0)
 
-        # Step 4: Format the data for the chart.
-        # Sort weeks chronologically.
         sorted_weeks = sorted(weekly_data.keys())
 
         labels = []
@@ -1203,11 +1263,7 @@ def get_attendance_trends(current_user):
         for week_key in sorted_weeks:
             year, week_num = week_key
             data = weekly_data[week_key]
-            
-            # Calculate the attendance rate for the week.
             rate = (data['attended'] / data['possible']) * 100 if data['possible'] > 0 else 0
-            
-            # Create a user-friendly label.
             labels.append(f"Week {week_num}, {year}")
             values.append(round(rate))
 
@@ -1223,24 +1279,31 @@ def get_attendance_trends(current_user):
 def get_at_risk_students(current_user):
     """
     Identifies students whose attendance rate in the last 3 weeks has dropped
-    by 25 percentage points or more compared to their overall average across all courses
-    taught by the lecturer.
+    by 25 percentage points or more compared to their overall average.
+    - For Lecturers, this is based on courses they teach.
+    - For Admins, this is based on ALL courses.
     """
     try:
         three_weeks_ago = datetime.utcnow().date() - timedelta(weeks=3)
         at_risk_students_data = []
 
-        # 1. Get all unique students in the lecturer's courses
-        students = db.session.query(Student).join(Student.courses).filter(
-            Course.lecturer_id == current_user.id
-        ).distinct().all()
+        # --- THIS IS THE FIX ---
+        # The query now adapts based on the user's role.
+        student_query = db.session.query(Student).join(Student.courses)
+        course_query = db.session.query(Course.id)
 
-        course_ids_taught_by_lecturer = [c.id for c in db.session.query(Course.id).filter(Course.lecturer_id == current_user.id).all()]
+        if not current_user.is_admin and current_user.role == 'lecturer':
+            student_query = student_query.filter(Course.lecturer_id == current_user.id)
+            course_query = course_query.filter(Course.lecturer_id == current_user.id)
+
+        students = student_query.distinct().all()
+        course_ids_in_scope = [c.id for c in course_query.all()]
+        # --- END OF FIX ---
 
         for student in students:
-            # 2. For each student, find all sessions they should have attended from this lecturer
+            # Adjust queries to only consider the courses in scope (either lecturer's or all)
             possible_sessions_query = db.session.query(Session).join(Course).join(Course.students).filter(
-                Course.lecturer_id == current_user.id,
+                Course.id.in_(course_ids_in_scope),
                 Student.id == student.id
             )
             
@@ -1250,29 +1313,23 @@ def get_at_risk_students(current_user):
             total_possible_count = len(all_possible_sessions)
             recent_possible_count = len(recent_possible_sessions)
             
-            # If there are no sessions, or no recent sessions to compare, skip
             if total_possible_count == 0 or recent_possible_count == 0:
                 continue
 
-            # 3. Find all their attendance records for this lecturer's sessions
             attended_sessions_query = db.session.query(Attendance).join(Session).filter(
                 Attendance.student_id == student.id,
-                Session.course_id.in_(course_ids_taught_by_lecturer)
+                Session.course_id.in_(course_ids_in_scope)
             )
 
             all_attended_sessions = attended_sessions_query.all()
-            
-            # This is a bit inefficient, but necessary with the current structure
             recent_attended_sessions = [a for a in all_attended_sessions if db.session.query(Session).get(a.session_id).session_date >= three_weeks_ago]
 
             total_attended_count = len(all_attended_sessions)
             recent_attended_count = len(recent_attended_sessions)
 
-            # 4. Calculate rates and check for risk
             overall_rate = (total_attended_count / total_possible_count) * 100
             recent_rate = (recent_attended_count / recent_possible_count) * 100
             
-            # Check for a drop of 25 percentage points or more
             if overall_rate - recent_rate >= 25:
                 at_risk_students_data.append({
                     'student_id': student.student_id,
@@ -1282,7 +1339,6 @@ def get_at_risk_students(current_user):
                     'drop': round(overall_rate - recent_rate)
                 })
 
-        # Sort by the largest drop
         return jsonify(sorted(at_risk_students_data, key=lambda x: x['drop'], reverse=True))
 
     except Exception as e:
@@ -2702,7 +2758,8 @@ def create_qr_code(current_user, session_id):
         session.qr_code_uuid = str(uuid4())
 
         # --- FIX: Construct the full URL for the public attendance marking page ---
-        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+        #frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+        frontend_url = os.environ.get("FRONTEND_URL")
         full_scan_url = f"{frontend_url}/attendance/mark?session_id={session_id}&uuid={session.qr_code_uuid}"
         
         # Generate the QR code from the full URL
@@ -3073,20 +3130,24 @@ def get_my_attendance_trends(current_user):
         # --- 6. Process data for Weekly Trend Chart ---
         from collections import defaultdict
         
-        # {week_key: {'possible': count, 'attended': count}}
         weekly_data = defaultdict(lambda: {'possible': 0, 'attended': 0})
         
         # Populate possible sessions per week
         for _, session_date in possible_sessions:
-            week_key = (session_date.isocalendar().year, session_date.isocalendar().week)
+            # --- THIS IS THE FIX ---
+            iso_calendar = session_date.isocalendar()
+            week_key = (iso_calendar[0], iso_calendar[1]) # (year, week_number)
+            # --- END OF FIX ---
             weekly_data[week_key]['possible'] += 1
             
         # Populate attended sessions per week
         for _, session_date in attended_sessions:
-            week_key = (session_date.isocalendar().year, session_date.isocalendar().week)
+            # --- THIS IS THE FIX ---
+            iso_calendar = session_date.isocalendar()
+            week_key = (iso_calendar[0], iso_calendar[1]) # (year, week_number)
+            # --- END OF FIX ---
             weekly_data[week_key]['attended'] += 1
             
-        # Format for chart
         sorted_weeks = sorted(weekly_data.keys())
         weekly_trend_data = []
         for week_key in sorted_weeks:
@@ -3364,7 +3425,6 @@ def import_students(current_user):
                 new_user.student_profile = new_student
 
                 db.session.add(new_user)
-                db.session.add(new_student)
                 imported_students.append(student_data)
                 
                 # Add to maps to prevent duplicate creation in the same batch run

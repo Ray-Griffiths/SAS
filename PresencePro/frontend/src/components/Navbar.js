@@ -35,7 +35,7 @@ const Navbar = () => {
         </Link>
 
         {/* Links and Buttons on the right */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 flex-wrap justify-end">
           {user ? (
             <>
               <NavLink to="/">Home</NavLink>

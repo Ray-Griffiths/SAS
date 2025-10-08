@@ -36,7 +36,7 @@ const Login = () => {
           </div>
         )}
         {successMessage && (
-          <div className="p-4 text-sm text-green-700 bg-green-100 rounded-lg text-center" role="ale rt">
+          <div className="p-4 text-sm text-green-700 bg-green-100 rounded-lg text-center" role="alert">
             {successMessage}
           </div>
         )}

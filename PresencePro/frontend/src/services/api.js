@@ -2,6 +2,7 @@
 import axios from 'axios';
 
 const api = axios.create({
+  baseURL: 'https://presence-pro-backend-539204944881.us-central1.run.app',
   headers: {
     'Content-Type': 'application/json',
   },
